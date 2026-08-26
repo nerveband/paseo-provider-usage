@@ -69,8 +69,10 @@ function UsageBar({ usedPercent, theme }: { usedPercent: number; theme: PluginTh
 
 export function MainSurface({ theme, layout }: PluginSurfaceProps) {
   const fetchUsage = useRpc(getProviderUsage);
-  // The daemon reuses a recent snapshot so mounting a surface cannot hammer rate-limited
-  // provider endpoints; only an explicit refresh asks for fresh numbers.
+  // The daemon answers instantly with its last snapshot and revalidates behind it, so the
+  // surface paints known numbers rather than a spinner. While a snapshot is marked stale,
+  // poll quickly to pick up the fresh numbers; otherwise stay quiet, because provider
+  // quota endpoints are rate limited.
   const forceNextFetch = useRef(false);
   const query = useQuery({
     queryKey: ["provider-usage"],
@@ -80,7 +82,7 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
       return fetchUsage({ force });
     },
     staleTime: 60_000,
-    refetchInterval: 5 * 60_000,
+    refetchInterval: ({ state }) => (state.data?.stale ? 2_000 : 5 * 60_000),
   });
   const refresh = useCallback(() => {
     forceNextFetch.current = true;
@@ -109,7 +111,14 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
         fontWeight: "600" as const,
         letterSpacing: 0.2,
       },
-      caption: { color: theme.colors.foregroundMuted, fontSize: 12, marginTop: 2 },
+      captionRow: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: 8,
+        marginTop: 2,
+      },
+      caption: { color: theme.colors.foregroundMuted, fontSize: 12 },
+      captionUpdating: { color: theme.colors.accent, fontSize: 12 },
       refresh: {
         minHeight: 32,
         paddingHorizontal: 12,
@@ -155,9 +164,12 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
     [theme, layout.compact],
   );
 
-  const fetchedAt = query.data?.fetchedAt
-    ? new Date(query.data.fetchedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+  const snapshot = query.data;
+  const fetchedAt = snapshot?.fetchedAt
+    ? new Date(snapshot.fetchedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
     : null;
+  // Revalidating behind cached numbers is inline status, not a blocking state.
+  const updating = Boolean(snapshot) && (snapshot?.stale === true || query.isFetching);
 
   return (
     <ScrollView
@@ -170,36 +182,43 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
           <Text accessibilityRole="header" style={styles.title}>
             Plan usage
           </Text>
-          <Text style={styles.caption}>
-            {fetchedAt ? `Updated ${fetchedAt}` : "Claude, Codex, and Antigravity"}
-          </Text>
+          <View style={styles.captionRow}>
+            <Text style={styles.caption}>
+              {fetchedAt ? `Updated ${fetchedAt}` : "Claude, Codex, and Antigravity"}
+            </Text>
+            {updating ? (
+              <Text style={styles.captionUpdating} accessibilityLiveRegion="polite">
+                Updating…
+              </Text>
+            ) : null}
+          </View>
         </View>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Refresh plan usage"
-          disabled={query.isFetching}
+          disabled={updating}
           onPress={refresh}
           style={({ pressed }) => [
             styles.refresh,
-            { opacity: query.isFetching ? 0.5 : pressed ? 0.7 : 1 },
+            { opacity: updating ? 0.5 : pressed ? 0.7 : 1 },
           ]}
         >
-          <Text style={styles.refreshText}>{query.isFetching ? "Refreshing" : "Refresh"}</Text>
+          <Text style={styles.refreshText}>{updating ? "Refreshing" : "Refresh"}</Text>
         </Pressable>
       </View>
 
-      {query.isLoading ? (
+      {!snapshot && query.isLoading ? (
         <View style={styles.state} accessibilityLiveRegion="polite">
           <ActivityIndicator color={theme.colors.accent} />
           <Text style={styles.stateText}>Reading plan limits…</Text>
         </View>
-      ) : query.isError ? (
+      ) : query.isError && !snapshot ? (
         <View style={styles.state} accessibilityLiveRegion="assertive">
           <Text style={styles.error}>Usage could not be loaded.</Text>
           <Text style={styles.stateText}>{query.error.message}</Text>
         </View>
       ) : (
-        query.data?.providers.map((provider: ProviderUsage) => (
+        snapshot?.providers.map((provider: ProviderUsage) => (
           <View key={provider.id}>
             <View style={styles.divider} />
             <View style={styles.provider}>

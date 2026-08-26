@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import type { ProviderUsage } from "./usage.shared";
+import { usageSnapshotSchema, type ProviderUsage } from "./usage.shared";
 
 const execFileAsync = promisify(execFile);
 const providerIds = ["claude", "codex", "antigravity"] as const;
@@ -259,31 +259,80 @@ async function fetchProvider(providerId: ProviderId): Promise<ProviderUsage> {
   return runCodexBar(providerId, true);
 }
 
-type UsageSnapshot = { fetchedAt: string; providers: ProviderUsage[] };
+type UsageSnapshot = {
+  fetchedAt: string;
+  providers: ProviderUsage[];
+  stale: boolean;
+};
+
+/** How long a snapshot is served without triggering a background refresh. */
+const SNAPSHOT_TTL_MS = 60_000;
 
 /**
- * Provider usage endpoints are rate limited per account, so every surface mount must not
- * trigger a fresh upstream fetch. Reuse a recent snapshot and let an explicit refresh
- * bypass it.
+ * Surviving a daemon or plugin reload matters more than a cold-start fetch: the surface
+ * should paint the last known numbers immediately and revalidate behind them.
  */
-const SNAPSHOT_TTL_MS = 60_000;
+const snapshotPath = join(
+  process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"),
+  "paseo-provider-usage",
+  "snapshot.json",
+);
 
 /** Shared so overlapping surfaces and refresh presses cannot double-fetch a provider. */
 let inFlight: Promise<UsageSnapshot> | null = null;
 let cached: { at: number; snapshot: UsageSnapshot } | null = null;
+let restored = false;
+
+async function restoreSnapshot(): Promise<void> {
+  if (restored) return;
+  restored = true;
+  try {
+    const raw = await readFile(snapshotPath, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    const snapshot = usageSnapshotSchema.parse(parsed);
+    // Treat a restored snapshot as stale so the first request revalidates it.
+    cached = { at: 0, snapshot: { ...snapshot, stale: true } };
+  } catch {
+    // No usable snapshot on disk: the first request performs a cold fetch.
+  }
+}
+
+async function persistSnapshot(snapshot: UsageSnapshot): Promise<void> {
+  try {
+    await mkdir(dirname(snapshotPath), { recursive: true, mode: 0o700 });
+    const temporary = `${snapshotPath}.${process.pid}.tmp`;
+    await writeFile(temporary, JSON.stringify(snapshot), { mode: 0o600 });
+    await rename(temporary, snapshotPath);
+  } catch {
+    // A cache that cannot be written must not fail the request.
+  }
+}
+
+function refresh(): Promise<UsageSnapshot> {
+  if (inFlight) return inFlight;
+  inFlight = (async () => {
+    const snapshot: UsageSnapshot = {
+      fetchedAt: new Date().toISOString(),
+      providers: await Promise.all(providerIds.map(fetchProvider)),
+      stale: false,
+    };
+    cached = { at: Date.now(), snapshot };
+    await persistSnapshot(snapshot);
+    return snapshot;
+  })();
+  return inFlight.finally(() => {
+    inFlight = null;
+  });
+}
 
 export async function handleProviderUsage({ force }: { force?: boolean }) {
-  if (!force && cached && Date.now() - cached.at < SNAPSHOT_TTL_MS) return cached.snapshot;
-  if (inFlight) return inFlight;
-  inFlight = (async () => ({
-    fetchedAt: new Date().toISOString(),
-    providers: await Promise.all(providerIds.map(fetchProvider)),
-  }))();
-  try {
-    const snapshot = await inFlight;
-    cached = { at: Date.now(), snapshot };
-    return snapshot;
-  } finally {
-    inFlight = null;
+  await restoreSnapshot();
+  if (force) return refresh();
+  if (cached) {
+    if (Date.now() - cached.at < SNAPSHOT_TTL_MS) return cached.snapshot;
+    // Serve what we have now and revalidate behind it, so opening the surface never waits.
+    void refresh().catch(() => {});
+    return { ...cached.snapshot, stale: true };
   }
+  return refresh();
 }

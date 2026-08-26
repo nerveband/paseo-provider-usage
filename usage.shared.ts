@@ -23,13 +23,17 @@ export const providerUsageSchema = z.object({
   error: z.string().nullable(),
 });
 
+export const usageSnapshotSchema = z.object({
+  fetchedAt: z.string(),
+  providers: z.array(providerUsageSchema),
+  /** True when these numbers were served from cache while a refresh runs behind them. */
+  stale: z.boolean(),
+});
+
 export const getProviderUsage = defineRpc({
   name: "provider-usage.get",
   input: z.object({ force: z.boolean().optional() }),
-  output: z.object({
-    fetchedAt: z.string(),
-    providers: z.array(providerUsageSchema),
-  }),
+  output: usageSnapshotSchema,
 });
 
 export type ProviderUsage = z.infer<typeof providerUsageSchema>;

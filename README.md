@@ -74,13 +74,23 @@ Providers, refresh cadence, and thresholds are code-level constants in `usage.se
 
 ## Refresh behavior
 
-Provider quota endpoints are rate limited per account, so the plugin is deliberately quiet:
+Opening the surface never blocks on a fetch. The daemon answers with the last snapshot it has
+and revalidates behind it, so you read numbers immediately and see `Updating…` next to the
+timestamp while fresh ones arrive. A spinner appears only on the very first run, when there is
+no snapshot yet.
 
-- The daemon caches a snapshot for 60 seconds, so opening the surface repeatedly does not
-  trigger repeated upstream fetches.
+The snapshot is written to `$XDG_STATE_HOME/paseo-provider-usage/snapshot.json` (default
+`~/.local/state/...`) with mode `0600`, so a daemon or plugin reload still paints instantly. It
+holds usage numbers, reset times, and the account label — never a token.
+
+Provider quota endpoints are rate limited per account, so fetching stays deliberately quiet:
+
+- A snapshot under 60 seconds old is served as-is, with no upstream fetch.
+- An older snapshot is served immediately and refreshed in the background.
 - Concurrent requests share one in-flight fetch.
-- The surface revalidates every five minutes.
-- **Refresh** bypasses the cache and asks for fresh numbers.
+- The surface revalidates every five minutes, and polls every two seconds only while a
+  background refresh is outstanding.
+- **Refresh** bypasses the cache and waits for fresh numbers.
 
 Claude's OAuth token is read from OMP's cache first. A forced token refresh mints a new access
 token and invalidates the previous one, so it is used only after the provider rejects the cached

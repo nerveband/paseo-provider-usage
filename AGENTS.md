@@ -30,8 +30,11 @@ tokens, so treat every change as security-relevant.
 
 - Provider quota endpoints are rate limited per account. Do not add polling, retry loops, or
   per-mount fetches.
-- Preserve the existing quiet-fetch design: a 60 second daemon-side snapshot cache, one shared
-  in-flight request, five minute revalidation, and cache bypass only on explicit user refresh.
+- Preserve the existing quiet-fetch design: serve the last snapshot immediately, revalidate in
+  the background, share one in-flight request, keep the 60 second freshness window and five
+  minute revalidation, and bypass the cache only on explicit user refresh.
+- The on-disk snapshot may hold usage numbers and an account label. Never write a token,
+  cookie, or credential into it, and keep it at mode `0600`.
 - Read OAuth tokens from cache first. A forced refresh mints a new access token and invalidates
   the previous one, so force it only after the provider rejects the cached token.
 - Do not launch a provider GUI, IDE, or interactive TUI to obtain usage.
