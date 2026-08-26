@@ -72,10 +72,15 @@ function normalize(providerId: ProviderId, payload: unknown): ProviderUsage {
       for (const item of extra) {
         const entry = object(item);
         if (!entry) continue;
+        const title = string(entry.title);
+        // Providers also report internal model-pool lanes such as `gpt-reserve`, whose
+        // title is an identifier rather than a quota name. Those mirror the main window
+        // and are not user-facing limits, so keep them out of the surface.
+        if (title && !/\s/.test(title) && /[-_]/.test(title)) continue;
         addWindow(
           windows,
           string(entry.id) ?? `extra-${windows.length}`,
-          string(entry.title) ?? "Additional limit",
+          title ?? "Additional limit",
           entry.window,
         );
       }

@@ -10,6 +10,9 @@ Each row is one quota window: the label, when it resets, the share consumed, and
 bar. Rows at 90% or above turn red. The account line names the plan, account, and which data
 source answered.
 
+Internal model-pool lanes such as `gpt-reserve` are hidden. Those are identifier-named
+mirrors of a real window rather than limits you plan around.
+
 ## Why
 
 Paseo already knows provider usage, but it lives behind a hover tooltip and a settings screen.

@@ -41,7 +41,8 @@ tokens, so treat every change as security-relevant.
 - Bars encode a used share from zero. Do not truncate the baseline, scale by area, or rescale to
   make a value look dramatic.
 - Never fabricate, interpolate, or default a missing number. A window with no reported usage is
-  omitted; a provider failure renders as that provider's message.
+  omitted; a provider failure renders as that provider's message. Identifier-named
+  model-pool lanes are hidden because they mirror a real window; never hide a genuine limit.
 - Every window row must show timing: the absolute reset timestamp when reported, else the
   provider's reset text, else the window length.
 - Percentages shown to the user must be the provider's own values, clamped to 0-100 and rounded
