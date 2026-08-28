@@ -48,14 +48,21 @@ authenticates those providers another way.
 
 ## Install
 
+Install directly from Git:
+
 ```bash
-git clone https://github.com/nerveband/paseo-provider-usage.git
-cd paseo-provider-usage
-npm install
-npm run typecheck
-paseo plugin install "$PWD"
+paseo plugin add nerveband/paseo-provider-usage
 paseo plugin ls
 ```
+
+Check and apply updates:
+
+```bash
+paseo plugin status provider-usage
+paseo plugin update provider-usage
+```
+
+For local development, clone the repository, run `npm install` and `npm run typecheck`, then use `paseo plugin install "$PWD"`.
 
 Open the app and pick **Usage** in the sidebar, or run the **Open plan usage** action from the
 Command Center (`Ctrl`/`Cmd` + `K`).
