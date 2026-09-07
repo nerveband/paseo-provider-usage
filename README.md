@@ -19,6 +19,16 @@ Paseo already knows provider usage, but it lives behind a hover tooltip and a se
 This plugin turns the same information into a persistent, keyboard-reachable sidebar surface and
 adds Antigravity, which Paseo does not report.
 
+## Features
+
+- **Plan Quotas & Rate Limits:** Real-time rolling window consumption (5-hour, daily, weekly, monthly) for Claude, Codex, and Antigravity with reset timers and critical threshold warnings.
+- **Token Spend & Model Analytics:**
+  - **Activity Block Showcase:** GitHub-style calendar/activity heatmap grid displaying daily (or hourly for 24h) token consumption with 5 intensity levels.
+  - **Interactive Block Inspection:** Hover or tap any activity block to inspect exact date/time, total tokens, input/output/cache breakdown, estimated API-equivalent cost, session/turn counts, and model breakdown.
+  - **Filterable:** Time range presets (24H, 7D, 14D, 30D, ALL), plus provider and model filters.
+  - **KPI Summary Cards:** Total token burn, estimated API cost, top model burn share, and daily pace.
+  - **Model Breakdown & Trajectory:** Ranked model list with color-coded progress bars showing token share and estimated API costs.
+
 ## What it reads
 
 Usage is fetched with the [CodexBar](https://github.com/steipete/CodexBar) CLI, which reuses

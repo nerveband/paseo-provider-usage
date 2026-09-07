@@ -37,3 +37,102 @@ export const getProviderUsage = defineRpc({
 });
 
 export type ProviderUsage = z.infer<typeof providerUsageSchema>;
+
+export const tokenAnalyticsFilterSchema = z.object({
+  range: z.enum(["24h", "7d", "14d", "30d", "all"]).default("7d"),
+  providerId: z.string().optional(),
+  modelId: z.string().optional(),
+  timezone: z.string().optional(),
+});
+
+export const tokenModelBreakdownItemSchema = z.object({
+  modelId: z.string(),
+  modelLabel: z.string(),
+  providerId: z.string(),
+  totalTokens: z.number(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number(),
+  cacheWriteTokens: z.number(),
+  estimatedCostUsd: z.number().nullable(),
+});
+
+export const tokenTimeBucketSchema = z.object({
+  timestamp: z.string(),
+  label: z.string(),
+  totalTokens: z.number(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number(),
+  cacheWriteTokens: z.number(),
+  estimatedCostUsd: z.number().nullable(),
+  turnCount: z.number(),
+  sessionCount: z.number(),
+  intensity: z.number().min(0).max(4),
+  modelBreakdown: z.array(tokenModelBreakdownItemSchema),
+});
+
+export const tokenModelSummarySchema = z.object({
+  modelId: z.string(),
+  modelLabel: z.string(),
+  providerId: z.string(),
+  providerLabel: z.string(),
+  totalTokens: z.number(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number(),
+  cacheWriteTokens: z.number(),
+  estimatedCostUsd: z.number().nullable(),
+  percentage: z.number(),
+});
+
+export const tokenAnalyticsSummarySchema = z.object({
+  totalTokens: z.number(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number(),
+  cacheWriteTokens: z.number(),
+  estimatedCostUsd: z.number().nullable(),
+  topModelLabel: z.string().nullable(),
+  topModelShare: z.number(),
+  turnCount: z.number(),
+  sessionCount: z.number(),
+  avgDailyTokens: z.number(),
+});
+
+export const tokenAnalyticsCoverageSchema = z.object({
+  earliestTimestamp: z.string().nullable(),
+  latestTimestamp: z.string().nullable(),
+  agentsDiscovered: z.number(),
+  sessionsParsed: z.number(),
+  unpricedTokens: z.number(),
+});
+
+export const filterOptionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  providerId: z.string().optional(),
+});
+
+export const tokenAnalyticsResponseSchema = z.object({
+  generatedAt: z.string(),
+  timezone: z.string(),
+  bucketGranularity: z.enum(["hour", "day"]),
+  summary: tokenAnalyticsSummarySchema,
+  buckets: z.array(tokenTimeBucketSchema),
+  models: z.array(tokenModelSummarySchema),
+  availableProviders: z.array(filterOptionSchema),
+  availableModels: z.array(filterOptionSchema),
+  coverage: tokenAnalyticsCoverageSchema,
+});
+
+export const getTokenAnalytics = defineRpc({
+  name: "provider-usage.analytics",
+  input: tokenAnalyticsFilterSchema,
+  output: tokenAnalyticsResponseSchema,
+});
+
+export type TokenAnalyticsFilter = z.infer<typeof tokenAnalyticsFilterSchema>;
+export type TokenAnalyticsResponse = z.infer<typeof tokenAnalyticsResponseSchema>;
+export type TokenTimeBucket = z.infer<typeof tokenTimeBucketSchema>;
+export type TokenModelSummary = z.infer<typeof tokenModelSummarySchema>;

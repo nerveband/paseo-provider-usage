@@ -1,10 +1,11 @@
 import type { PluginContext } from "@getpaseo/plugin";
 import { MainSurface } from "./main.client";
-import { handleProviderUsage } from "./usage.server";
-import { getProviderUsage } from "./usage.shared";
+import { handleProviderUsage, handleTokenAnalytics } from "./usage.server";
+import { getProviderUsage, getTokenAnalytics } from "./usage.shared";
 
 export default function contribute(plugin: PluginContext) {
   plugin.handle(getProviderUsage, handleProviderUsage);
+  plugin.handle(getTokenAnalytics, handleTokenAnalytics);
   plugin.addSurface("main", MainSurface);
   plugin.addSidebarItem({
     id: "usage",
