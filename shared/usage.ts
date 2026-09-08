@@ -83,6 +83,7 @@ export const tokenModelSummarySchema = z.object({
   cacheReadTokens: z.number(),
   cacheWriteTokens: z.number(),
   estimatedCostUsd: z.number().nullable(),
+  pricingBasis: z.string().optional(),
   percentage: z.number(),
 });
 
@@ -98,6 +99,7 @@ export const tokenAnalyticsSummarySchema = z.object({
   turnCount: z.number(),
   sessionCount: z.number(),
   avgDailyTokens: z.number(),
+  pricingNote: z.string().optional(),
 });
 
 export const tokenAnalyticsCoverageSchema = z.object({

@@ -397,6 +397,19 @@ function calculateTurnCost(
     1_000_000;
   return Number(cost.toFixed(6));
 }
+function getModelPricingBasis(modelId: string): string {
+  const cleanModel = modelId.toLowerCase().replace(/^[^/]+\//, "");
+  let price = MODEL_PRICES[cleanModel];
+  if (!price) {
+    const key = Object.keys(MODEL_PRICES).find((k) => cleanModel.includes(k) || k.includes(cleanModel));
+    if (key) price = MODEL_PRICES[key];
+  }
+  if (price) {
+    return `Standard API rate ($${price.input}/$${price.output} per 1M)`;
+  }
+  return "Embedded session telemetry";
+}
+
 
 function formatProviderLabel(providerId: string): string {
   const map: Record<string, string> = {
@@ -886,6 +899,7 @@ export async function handleTokenAnalytics(
       cacheReadTokens: agg.cacheReadTokens,
       cacheWriteTokens: agg.cacheWriteTokens,
       estimatedCostUsd: agg.estimatedCostUsd,
+      pricingBasis: getModelPricingBasis(modelId),
       percentage: grandTotalTokens > 0 ? Number(((agg.totalTokens / grandTotalTokens) * 100).toFixed(1)) : 0,
     }))
     .sort((a, b) => b.totalTokens - a.totalTokens);
@@ -917,6 +931,7 @@ export async function handleTokenAnalytics(
       turnCount: matchingTurns.length,
       sessionCount: allMatchingSessions.size,
       avgDailyTokens,
+      pricingNote: "Standard direct provider API rates ($/1M tokens) & embedded session telemetry (no OpenRouter markup)",
     },
     buckets,
     models: modelSummaries,
