@@ -10,7 +10,7 @@ import {
   type TokenAnalyticsFilter,
   type TokenAnalyticsResponse,
   type TokenTimeBucket,
-} from "./usage.shared";
+} from "../shared/usage";
 
 const execFileAsync = promisify(execFile);
 const providerIds = ["claude", "codex", "antigravity"] as const;

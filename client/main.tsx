@@ -1,5 +1,5 @@
-import type { PluginSurfaceProps, PluginTheme } from "@getpaseo/plugin";
-import { useRpc } from "@getpaseo/plugin";
+import type { PluginTheme } from "@getpaseo/plugin";
+import { useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useQuery } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
@@ -9,7 +9,7 @@ import {
   type ProviderUsage,
   type TokenAnalyticsFilter,
   type TokenTimeBucket,
-} from "./usage.shared";
+} from "../shared/usage";
 
 /** Used share at or above which a window is reported as nearly exhausted. */
 const CRITICAL_USED_PERCENT = 90;

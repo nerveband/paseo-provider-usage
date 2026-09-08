@@ -1,3 +1,6 @@
 {
-  "id": "provider-usage"
+  "id": "provider-usage",
+  "requirements": {
+    "paseo": ">=0.8.0"
+  }
 }
