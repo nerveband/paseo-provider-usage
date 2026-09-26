@@ -1,7 +1,7 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { useQuery } from "@tanstack/react-query";
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import {
   getProviderUsage,
@@ -84,6 +84,12 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
   const [range, setRange] = useState<TokenAnalyticsFilter["range"]>("7d");
   const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
   const [selectedBucketIndex, setSelectedBucketIndex] = useState<number | null>(null);
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const scrollY = useRef(0);
+  // Offset captured at the moment a range is chosen. Kept separate from scrollY
+  // because a content shrink clamps the scroll position and would otherwise
+  // overwrite the value we intend to restore to.
+  const restoreY = useRef<number | null>(null);
 
   const fetchUsage = useRpc(getProviderUsage);
   const forceNextQuotaFetch = useRef(false);
@@ -102,6 +108,7 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
   const analyticsQuery = useQuery({
     queryKey: ["token-analytics", range, selectedModel],
     queryFn: () => fetchAnalytics({ range, modelId: selectedModel }),
+    placeholderData: keepPreviousData,
     staleTime: 30_000,
   });
 
@@ -113,6 +120,13 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
 
   const isUpdating =
     quotaQuery.data?.stale === true || quotaQuery.isFetching || analyticsQuery.isFetching;
+
+  useLayoutEffect(() => {
+    if (analyticsQuery.isFetching || restoreY.current === null) return;
+    const y = restoreY.current;
+    restoreY.current = null;
+    scrollRef.current?.scrollTo({ y, animated: false });
+  }, [analyticsQuery.isFetching]);
 
   const styles = useMemo(() => {
     const muted = theme.colors.foregroundMuted;
@@ -200,7 +214,18 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
     : null;
 
   return (
-    <ScrollView testID="provider-usage-surface" style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView
+      ref={scrollRef}
+      testID="provider-usage-surface"
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      onScroll={(event) => {
+        if (restoreY.current === null) {
+          scrollY.current = event.nativeEvent.contentOffset.y;
+        }
+      }}
+      scrollEventThrottle={16}
+    >
       <View style={styles.header}>
         <View style={{ flexShrink: 1 }}>
           <Text accessibilityRole="header" style={styles.title}>
@@ -319,8 +344,10 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
                   key={r}
                   accessibilityRole="tab"
                   accessibilityState={{ selected: active }}
+                  aria-selected={active}
                   accessibilityLabel={r === "all" ? "All time" : `Last ${r}`}
                   onPress={() => {
+                    restoreY.current = scrollY.current;
                     setRange(r);
                     setSelectedBucketIndex(null);
                   }}
@@ -377,7 +404,7 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
                     const height = maxBucketTokens > 0 ? (b.totalTokens / maxBucketTokens) * 100 : 0;
                     return (
                       <Pressable
-                        key={b.timestamp}
+                        key={`${b.timestamp}-${idx}`}
                         accessibilityRole="button"
                         accessibilityState={{ selected: active }}
                         accessibilityLabel={`${b.label}: ${formatTokens(b.totalTokens)} tokens`}

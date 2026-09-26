@@ -8,8 +8,7 @@ tokens, so treat every change as security-relevant.
 
 - Run `npm run typecheck` before any install or reload. A plugin that fails to typecheck will
   fail to load.
-- Apply source edits with `paseo plugin reload provider-usage`. Never restart the Paseo daemon to
-  pick up a change; a restart kills running agents, possibly including your own.
+- When an authorized task includes applying source changes live, use `paseo plugin reload provider-usage`. Never restart the Paseo daemon; that kills running agents.
 - Read `paseo plugin logs provider-usage` when a fetch fails. Do not add debug output that could
   print a token.
 - Verify UI work in a real client at desktop and compact widths, in a light and a dark theme.
@@ -70,3 +69,5 @@ tokens, so treat every change as security-relevant.
 - Do not import `*.server` modules from client files or `*.client` modules from server files.
 - Do not publish, release, or push to a remote without explicit approval from the repository
   owner.
+- Source edits alone do not authorize installation or reload. Run checks once for the affected behavior, not every turn; documentation-only work does not require runtime checks.
+- Superpowers workflows are opt-in, only when explicitly requested.
