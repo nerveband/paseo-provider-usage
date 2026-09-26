@@ -50,7 +50,7 @@ authenticates those providers another way.
 ## Requirements
 
 - A Paseo daemon with plugins enabled.
-- The CodexBar CLI on `PATH` at `~/.local/bin/codexbar`, or `CODEXBAR_BIN` pointing at it.
+- The CodexBar CLI (`codexbar`) on `PATH` or in `~/.local/bin`, or `CODEXBAR_BIN` pointing at it.
   Linux and macOS builds are published on
   [CodexBar releases](https://github.com/steipete/CodexBar/releases).
 - Optional: OMP with `anthropic` and `google-antigravity` accounts signed in, for the
@@ -84,7 +84,7 @@ daemon; that stops running agents.
 
 | Variable | Effect |
 | --- | --- |
-| `CODEXBAR_BIN` | Absolute path to the CodexBar CLI. Defaults to `~/.local/bin/codexbar`. |
+| `CODEXBAR_BIN` | Absolute path to the CodexBar CLI. Defaults to the first `codexbar` found on `PATH`, `~/.local/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`. |
 
 Providers, refresh cadence, and thresholds are code-level constants in `usage.server.ts` and
 `main.client.tsx`.

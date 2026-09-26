@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, constants, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   usageSnapshotSchema,
@@ -211,17 +211,46 @@ async function resolveAuth(
   }
 }
 
+const codexBarInstallHint =
+  "CodexBar CLI not found. Install it from https://github.com/steipete/CodexBar/releases " +
+  "(CodexBarCLI tarball) into ~/.local/bin or another PATH directory, or set CODEXBAR_BIN.";
+
+/** Finds the CodexBar CLI: CODEXBAR_BIN, then PATH, then common install directories. */
+async function findCodexBar(): Promise<string | null> {
+  const override = process.env.CODEXBAR_BIN;
+  if (override) return override;
+  const directories = [
+    ...(process.env.PATH ?? "").split(delimiter).filter(Boolean),
+    join(homedir(), ".local", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/Applications/CodexBar.app/Contents/Helpers",
+  ];
+  for (const directory of directories) {
+    const candidate = join(directory, "codexbar");
+    try {
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Try the next directory.
+    }
+  }
+  return null;
+}
+
 async function runCodexBar(
   providerId: ProviderId,
   forceRefresh: boolean,
 ): Promise<ProviderUsage> {
   let temporaryDirectory: string | null = null;
   try {
+    const binary = await findCodexBar();
+    if (!binary) throw new Error(codexBarInstallHint);
     const auth = await resolveAuth(providerId, forceRefresh);
     temporaryDirectory = auth.directory;
     const args = ["usage", "--provider", providerId, "--format", "json", "--source", auth.source];
     const { stdout } = await execFileAsync(
-      process.env.CODEXBAR_BIN || join(homedir(), ".local", "bin", "codexbar"),
+      binary,
       args,
       {
         timeout: 45_000,
@@ -250,7 +279,10 @@ async function runCodexBar(
       plan: null,
       updatedAt: null,
       windows: [],
-      error: error.message || "Usage unavailable",
+      error:
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+          ? codexBarInstallHint
+          : error.message || "Usage unavailable",
     };
   } finally {
     if (temporaryDirectory) {
@@ -331,7 +363,7 @@ function refresh(): Promise<UsageSnapshot> {
   });
 }
 
-export async function handleProviderUsage({ force }: { force?: boolean }) {
+export async function handleProviderUsage({ force }: { force?: boolean } = {}) {
   await restoreSnapshot();
   if (force) return refresh();
   if (cached) {
