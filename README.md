@@ -1,10 +1,10 @@
 # Paseo plan usage
 
-A [Paseo](https://paseo.sh) plugin that puts Claude, Codex, and Antigravity plan limits in the
+A [Paseo](https://paseo.sh) plugin that puts Claude, Codex, Antigravity, and OpenRouter usage in the
 sidebar, next to Tasks and any other sidebar contribution. One click, no menu digging, no second
 window.
 
-![The plugin sidebar surface showing Claude, Codex, and Antigravity quota windows](docs/screenshot.png)
+![The Usage surface showing Claude, Codex, Antigravity, and OpenRouter usage above agent activity](docs/screenshot.png)
 
 Each row is one quota window: the label, when it resets, the share consumed, and a zero-baseline
 bar. Rows at 90% or above turn red. The account line names the plan, account, and which data
@@ -21,13 +21,9 @@ adds Antigravity, which Paseo does not report.
 
 ## Features
 
-- **Plan Quotas & Rate Limits:** Real-time rolling window consumption (5-hour, daily, weekly, monthly) for Claude, Codex, and Antigravity with reset timers and critical threshold warnings.
-- **Token Spend & Model Analytics:**
-  - **Activity Block Showcase:** GitHub-style calendar/activity heatmap grid displaying daily (or hourly for 24h) token consumption with 5 intensity levels.
-  - **Interactive Block Inspection:** Hover or tap any activity block to inspect exact date/time, total tokens, input/output/cache breakdown, estimated API-equivalent cost, session/turn counts, and model breakdown.
-  - **Filterable:** Time range presets (24H, 7D, 14D, 30D, ALL), plus provider and model filters.
-  - **KPI Summary Cards:** Total token burn, estimated API cost, top model burn share, and daily pace.
-  - **Model Breakdown & Trajectory:** Ranked model list with color-coded progress bars showing token share and estimated API costs.
+- **Plans:** Rolling quota windows (session, weekly, monthly) for Claude, Codex, and Antigravity, with reset times. Rows at 90% or above turn red.
+- **OpenRouter:** Credit remaining, used, and added, plus 30-day activity (tokens, requests, models) as CodexBar reports them.
+- **Agent activity:** Token totals, estimated cost, and sessions for 24h, 7d, 14d, 30d, or all time; a per-day (or per-hour) bar chart you can tap to inspect; and a ranked model list. Tap a model to filter the view to it.
 
 ## What it reads
 
@@ -39,6 +35,17 @@ credentials you already have instead of asking for new ones.
 | Codex | The Codex CLI's own OAuth session. |
 | Claude | An OAuth access token borrowed from [OMP](https://paseo.sh/omp), else CodexBar's own strategies. |
 | Antigravity | The same OMP path, else CodexBar's local Antigravity probes, `agy` CLI, or Google OAuth. |
+| OpenRouter | The API key stored in CodexBar, else `OPENROUTER_API_KEY`. |
+
+### OpenRouter setup
+
+```bash
+codexbar config set-api-key --provider openrouter --stdin   # paste the key, then Ctrl-D
+```
+
+A regular API key shows credits and that key's own spend. A Management API key also shows
+account-wide 30-day activity. CodexBar reports model counts but not spend per model, so the
+plugin does not show per-model OpenRouter spend.
 
 Nothing launches a GUI. Antigravity usage is read over Google's OAuth quota endpoints, so neither
 the Antigravity desktop app nor an interactive `agy` session has to be running.

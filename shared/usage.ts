@@ -12,8 +12,20 @@ export const usageWindowSchema = z.object({
   windowMinutes: z.number().nullable(),
 });
 
+export const spendSchema = z.object({
+  /** Provider-reported groups such as Credits or Activity, as label/value rows. */
+  groups: z.array(
+    z.object({
+      title: z.string(),
+      rows: z.array(z.object({ label: z.string(), value: z.string() })),
+    }),
+  ),
+  /** Setup guidance when part of the spend data is unavailable. */
+  note: z.string().nullable(),
+});
+
 export const providerUsageSchema = z.object({
-  id: z.enum(["claude", "codex", "antigravity"]),
+  id: z.enum(["claude", "codex", "antigravity", "openrouter"]),
   name: z.string(),
   source: z.string().nullable(),
   account: z.string().nullable(),
@@ -21,6 +33,8 @@ export const providerUsageSchema = z.object({
   updatedAt: z.string().nullable(),
   windows: z.array(usageWindowSchema),
   error: z.string().nullable(),
+  /** Defaults to null so snapshots written before spend existed still load. */
+  spend: spendSchema.nullable().default(null),
 });
 
 export const usageSnapshotSchema = z.object({

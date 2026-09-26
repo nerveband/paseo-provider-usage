@@ -8,26 +8,12 @@ import {
   getTokenAnalytics,
   type ProviderUsage,
   type TokenAnalyticsFilter,
-  type TokenTimeBucket,
 } from "../shared/usage";
 
 /** Used share at or above which a window is reported as nearly exhausted. */
 const CRITICAL_USED_PERCENT = 90;
 
-const MODEL_PALETTE = [
-  "#3b82f6", // Blue
-  "#8b5cf6", // Purple
-  "#10b981", // Emerald
-  "#ec4899", // Pink
-  "#f59e0b", // Amber
-  "#06b6d4", // Cyan
-  "#ef4444", // Red
-  "#6366f1", // Indigo
-];
-
-function getModelColor(index: number): string {
-  return MODEL_PALETTE[index % MODEL_PALETTE.length];
-}
+const RANGES = ["24h", "7d", "14d", "30d", "all"] as const;
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
@@ -63,33 +49,31 @@ function resetLabel(window: ProviderUsage["windows"][number]): string | null {
   return null;
 }
 
-function UsageBar({ usedPercent, theme }: { usedPercent: number; theme: PluginTheme }) {
-  const critical = usedPercent >= CRITICAL_USED_PERCENT;
+/** A fill layer that derives a tint from a theme color, so every theme stays legible. */
+function Tint({ color, opacity }: { color: string; opacity: number }) {
   return (
     <View
-      style={{ height: 6, borderRadius: 3, overflow: "hidden" }}
+      pointerEvents="none"
+      style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: color, opacity }}
+    />
+  );
+}
+
+/** Horizontal share bar measured from zero. */
+function ShareBar({ percent, color, theme }: { percent: number; color: string; theme: PluginTheme }) {
+  return (
+    <View
+      style={{ height: 4, borderRadius: 2, overflow: "hidden" }}
       accessibilityRole="progressbar"
-      accessibilityValue={{ min: 0, max: 100, now: Math.round(usedPercent) }}
+      accessibilityValue={{ min: 0, max: 100, now: Math.round(percent) }}
     >
+      <Tint color={theme.colors.foreground} opacity={0.08} />
       <View
         style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: theme.colors.foreground,
-          opacity: 0.12,
-        }}
-      />
-      <View
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          bottom: 0,
-          width: `${Math.max(0, Math.min(100, usedPercent))}%`,
-          backgroundColor: critical ? theme.colors.statusDanger : theme.colors.accent,
+          width: `${Math.max(0, Math.min(100, percent))}%`,
+          height: "100%",
+          borderRadius: 2,
+          backgroundColor: color,
         }}
       />
     </View>
@@ -97,13 +81,10 @@ function UsageBar({ usedPercent, theme }: { usedPercent: number; theme: PluginTh
 }
 
 export function MainSurface({ theme, layout }: PluginSurfaceProps) {
-  // Filter state for token activity
   const [range, setRange] = useState<TokenAnalyticsFilter["range"]>("7d");
-  const [selectedProvider, setSelectedProvider] = useState<string | undefined>(undefined);
   const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
   const [selectedBucketIndex, setSelectedBucketIndex] = useState<number | null>(null);
 
-  // 1. Quota Query (CodexBar)
   const fetchUsage = useRpc(getProviderUsage);
   const forceNextQuotaFetch = useRef(false);
   const quotaQuery = useQuery({
@@ -117,16 +98,10 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
     refetchInterval: ({ state }) => (state.data?.stale ? 2_000 : 5 * 60_000),
   });
 
-  // 2. Token Analytics Query (Paseo Sessions)
   const fetchAnalytics = useRpc(getTokenAnalytics);
   const analyticsQuery = useQuery({
-    queryKey: ["token-analytics", range, selectedProvider, selectedModel],
-    queryFn: () =>
-      fetchAnalytics({
-        range,
-        providerId: selectedProvider,
-        modelId: selectedModel,
-      }),
+    queryKey: ["token-analytics", range, selectedModel],
+    queryFn: () => fetchAnalytics({ range, modelId: selectedModel }),
     staleTime: 30_000,
   });
 
@@ -137,769 +112,342 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
   }, [quotaQuery, analyticsQuery]);
 
   const isUpdating =
-    (Boolean(quotaQuery.data) && quotaQuery.data?.stale === true) ||
-    quotaQuery.isFetching ||
-    analyticsQuery.isFetching;
+    quotaQuery.data?.stale === true || quotaQuery.isFetching || analyticsQuery.isFetching;
 
   const styles = useMemo(() => {
-    const borderColor = "rgba(128, 128, 128, 0.2)";
-    const cardBg = "rgba(128, 128, 128, 0.08)";
-    const innerCardBg = "rgba(128, 128, 128, 0.14)";
-
+    const muted = theme.colors.foregroundMuted;
+    const fg = theme.colors.foreground;
     return {
       screen: { flex: 1, backgroundColor: theme.colors.surface0 },
       content: {
-        paddingVertical: layout.compact ? 16 : 24,
+        paddingVertical: layout.compact ? 16 : 28,
         paddingHorizontal: layout.compact ? 16 : 28,
         width: "100%" as const,
-        maxWidth: 720,
+        maxWidth: 640,
         alignSelf: "center" as const,
-        gap: 20,
+        gap: layout.compact ? 24 : 32,
       },
-
-      /* Top Header */
       header: {
         flexDirection: "row" as const,
-        alignItems: "center" as const,
+        alignItems: "flex-start" as const,
         justifyContent: "space-between" as const,
-        gap: 16,
-        paddingBottom: 4,
-      },
-      title: {
-        color: theme.colors.foreground,
-        fontSize: 17,
-        fontWeight: "700" as const,
-        letterSpacing: 0.2,
-      },
-      captionRow: {
-        flexDirection: "row" as const,
-        alignItems: "center" as const,
-        gap: 8,
-        marginTop: 2,
-      },
-      caption: { color: theme.colors.foregroundMuted, fontSize: 12 },
-      captionUpdating: { color: theme.colors.accent, fontSize: 12 },
-      refreshBtn: {
-        minHeight: 32,
-        paddingHorizontal: 14,
-        alignItems: "center" as const,
-        justifyContent: "center" as const,
-        borderRadius: 6,
-        backgroundColor: cardBg,
-        borderWidth: 1,
-        borderColor,
-      },
-      refreshBtnText: { color: theme.colors.accent, fontSize: 12, fontWeight: "600" as const },
-
-      /* Section Containers */
-      section: {
-        backgroundColor: cardBg,
-        borderRadius: 10,
-        padding: layout.compact ? 14 : 18,
-        borderWidth: 1,
-        borderColor,
-        gap: 16,
-      },
-      sectionHeader: {
-        flexDirection: "row" as const,
-        justifyContent: "space-between" as const,
-        alignItems: "center" as const,
-      },
-      sectionTitle: {
-        color: theme.colors.foreground,
-        fontSize: 13,
-        fontWeight: "700" as const,
-        letterSpacing: 0.4,
-        textTransform: "uppercase" as const,
-      },
-      sectionBadge: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 11,
-      },
-
-      /* Quota Provider Rows */
-      providerItem: {
         gap: 12,
-        paddingTop: 8,
       },
-      providerDivider: {
-        height: 1,
-        backgroundColor: borderColor,
-      },
-      providerHeading: {
-        flexDirection: "row" as const,
-        justifyContent: "space-between" as const,
-        alignItems: "baseline" as const,
-      },
-      providerName: {
-        color: theme.colors.foreground,
-        fontSize: 13,
-        fontWeight: "600" as const,
-      },
-      providerMeta: { color: theme.colors.foregroundMuted, fontSize: 11 },
-      windowRow: {
+      title: { color: fg, fontSize: 17, fontWeight: "600" as const },
+      caption: { color: muted, fontSize: 12, marginTop: 2 },
+      textButton: { color: theme.colors.accent, fontSize: 13, fontWeight: "500" as const },
+      section: { gap: layout.compact ? 14 : 16 },
+      sectionTitle: { color: muted, fontSize: 12, fontWeight: "600" as const },
+      block: { gap: 10 },
+      rowBetween: {
         flexDirection: "row" as const,
         alignItems: "baseline" as const,
         justifyContent: "space-between" as const,
-        gap: 8,
-      },
-      windowLabel: { color: theme.colors.foreground, fontSize: 12, flexShrink: 1 },
-      windowReset: { color: theme.colors.foregroundMuted, fontSize: 11 },
-      percentage: { color: theme.colors.foreground, fontSize: 12, fontWeight: "600" as const },
-      percentageCritical: { color: theme.colors.statusDanger, fontSize: 12, fontWeight: "600" as const },
-
-      /* Pricing Source Callout Banner */
-      pricingBanner: {
-        backgroundColor: innerCardBg,
-        borderRadius: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        flexDirection: "row" as const,
-        alignItems: "center" as const,
-        gap: 8,
-        borderLeftWidth: 3,
-        borderLeftColor: theme.colors.accent,
-      },
-      pricingBannerText: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 11,
-        lineHeight: 16,
-        flexShrink: 1,
-      },
-
-      /* Filter Controls */
-      filterBar: {
-        flexDirection: "row" as const,
-        flexWrap: "wrap" as const,
-        alignItems: "center" as const,
-        gap: 6,
-      },
-      rangePill: {
-        paddingVertical: 5,
-        paddingHorizontal: 12,
-        borderRadius: 6,
-        backgroundColor: innerCardBg,
-        borderWidth: 1,
-        borderColor,
-      },
-      rangePillActive: {
-        backgroundColor: theme.colors.accent,
-        borderColor: theme.colors.accent,
-      },
-      rangePillText: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 12,
-        fontWeight: "500" as const,
-      },
-      rangePillTextActive: {
-        color: theme.colors.accentForeground,
-        fontWeight: "700" as const,
-      },
-      filterChip: {
-        paddingVertical: 4,
-        paddingHorizontal: 8,
-        borderRadius: 4,
-        backgroundColor: innerCardBg,
-        borderWidth: 1,
-        borderColor,
-      },
-      filterChipActive: {
-        backgroundColor: theme.colors.accent,
-        borderColor: theme.colors.accent,
-      },
-      filterChipText: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 11,
-      },
-      filterChipTextActive: {
-        color: theme.colors.accentForeground,
-        fontWeight: "600" as const,
-      },
-
-      /* Model Comparison Trajectory Bar */
-      trajectoryCard: {
-        backgroundColor: innerCardBg,
-        borderRadius: 8,
-        padding: 12,
-        gap: 8,
-      },
-      trajectoryTitle: {
-        color: theme.colors.foreground,
-        fontSize: 12,
-        fontWeight: "600" as const,
-      },
-      stackedBarTrack: {
-        height: 12,
-        borderRadius: 6,
-        backgroundColor: "rgba(128, 128, 128, 0.2)",
-        flexDirection: "row" as const,
-        overflow: "hidden" as const,
-      },
-      trajectoryLegend: {
-        flexDirection: "row" as const,
-        flexWrap: "wrap" as const,
-        gap: 12,
-        marginTop: 4,
-      },
-      trajectoryLegendItem: {
-        flexDirection: "row" as const,
-        alignItems: "center" as const,
-        gap: 5,
-      },
-      legendDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-      },
-      legendLabel: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 11,
-      },
-
-      /* Activity Block Showcase (Heatmap Cards) */
-      blockRow: {
-        flexDirection: "row" as const,
-        flexWrap: "wrap" as const,
-        gap: 6,
-        justifyContent: "space-between" as const,
-      },
-      dayCard: {
-        flex: 1,
-        minWidth: layout.compact ? 42 : 54,
-        borderRadius: 6,
-        paddingVertical: 8,
-        paddingHorizontal: 4,
-        alignItems: "center" as const,
-        justifyContent: "center" as const,
-        borderWidth: 1,
-        borderColor,
-        gap: 4,
-      },
-      dayCardSelected: {
-        borderColor: theme.colors.foreground,
-        borderWidth: 2,
-      },
-      dayName: {
-        fontSize: 10,
-        fontWeight: "600" as const,
-        textTransform: "uppercase" as const,
-      },
-      dayDate: {
-        fontSize: 11,
-        fontWeight: "500" as const,
-      },
-      dayVolumeBadge: {
-        fontSize: 10,
-        fontWeight: "700" as const,
-        marginTop: 2,
-      },
-
-      /* Selected Day Inspection Card */
-      inspectionCard: {
-        backgroundColor: innerCardBg,
-        borderRadius: 8,
-        padding: 12,
-        gap: 8,
-        borderWidth: 1,
-        borderColor: theme.colors.accent,
-      },
-      inspectionHeader: {
-        flexDirection: "row" as const,
-        justifyContent: "space-between" as const,
-        alignItems: "center" as const,
-      },
-      inspectionTitle: {
-        color: theme.colors.foreground,
-        fontSize: 13,
-        fontWeight: "700" as const,
-      },
-      inspectionCost: {
-        color: theme.colors.accent,
-        fontSize: 13,
-        fontWeight: "700" as const,
-      },
-      inspectionStatsRow: {
-        flexDirection: "row" as const,
-        flexWrap: "wrap" as const,
         gap: 12,
       },
-      inspectionStatText: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 11,
+      name: { color: fg, fontSize: 14, fontWeight: "600" as const },
+      meta: { color: muted, fontSize: 12, flexShrink: 1, textAlign: "right" as const },
+      label: { color: fg, fontSize: 13, flexShrink: 1 },
+      subtle: { color: muted, fontSize: 12 },
+      value: { color: fg, fontSize: 13, fontWeight: "500" as const, fontVariant: ["tabular-nums" as const] },
+      valueCritical: {
+        color: theme.colors.statusDanger,
+        fontSize: 13,
+        fontWeight: "600" as const,
+        fontVariant: ["tabular-nums" as const],
       },
-      inspectionModelList: {
-        borderTopWidth: 1,
-        borderColor,
-        paddingTop: 6,
-        gap: 4,
-      },
-      inspectionModelRow: {
+      danger: { color: theme.colors.statusDanger, fontSize: 12 },
+      divider: { height: 1, overflow: "hidden" as const },
+      segmented: {
         flexDirection: "row" as const,
-        justifyContent: "space-between" as const,
-        alignItems: "center" as const,
-      },
-      inspectionModelName: {
-        color: theme.colors.foreground,
-        fontSize: 11,
-      },
-      inspectionModelTokens: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 11,
-      },
-
-      /* Model Breakdown List */
-      modelList: {
-        gap: 10,
-      },
-      modelCard: {
-        backgroundColor: innerCardBg,
+        alignSelf: "flex-start" as const,
         borderRadius: 8,
-        padding: 12,
-        gap: 8,
-      },
-      modelTopRow: {
-        flexDirection: "row" as const,
-        justifyContent: "space-between" as const,
-        alignItems: "center" as const,
-      },
-      modelTitleWrap: {
-        flexDirection: "row" as const,
-        alignItems: "center" as const,
-        gap: 6,
-        flexShrink: 1,
-      },
-      modelNameText: {
-        color: theme.colors.foreground,
-        fontSize: 13,
-        fontWeight: "600" as const,
-      },
-      pricingBasisTag: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 10,
-        backgroundColor: cardBg,
-        paddingHorizontal: 6,
-        paddingVertical: 1,
-        borderRadius: 4,
-      },
-      modelTokensText: {
-        color: theme.colors.foreground,
-        fontSize: 13,
-        fontWeight: "700" as const,
-      },
-      modelDetailRow: {
-        flexDirection: "row" as const,
-        justifyContent: "space-between" as const,
-        alignItems: "center" as const,
-      },
-      modelSubText: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 11,
-      },
-      modelCostText: {
-        color: theme.colors.accent,
-        fontSize: 12,
-        fontWeight: "600" as const,
-      },
-      modelProgressBar: {
-        height: 5,
-        borderRadius: 2.5,
-        backgroundColor: "rgba(128, 128, 128, 0.2)",
+        padding: 2,
         overflow: "hidden" as const,
       },
-
-      /* State and error rows */
-      stateBox: {
-        paddingVertical: 24,
-        alignItems: "center" as const,
-        gap: 8,
-      },
-      stateText: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 12,
-        textAlign: "center" as const,
-      },
+      segment: { overflow: "hidden" as const, paddingVertical: 4, paddingHorizontal: layout.compact ? 9 : 12, borderRadius: 6 },
+      segmentText: { color: muted, fontSize: 12, fontWeight: "500" as const },
+      segmentTextActive: { color: fg, fontSize: 12, fontWeight: "600" as const },
+      stats: { flexDirection: "row" as const, gap: layout.compact ? 20 : 32 },
+      statValue: { color: fg, fontSize: 20, fontWeight: "600" as const, fontVariant: ["tabular-nums" as const] },
+      chart: { flexDirection: "row" as const, alignItems: "flex-end" as const, height: 72, gap: 3 },
+      footnote: { color: muted, fontSize: 11, lineHeight: 16 },
+      state: { paddingVertical: 20, alignItems: "center" as const, gap: 8 },
     };
   }, [theme, layout.compact]);
 
+  const divider = (
+    <View style={styles.divider}>
+      <Tint color={theme.colors.foreground} opacity={0.08} />
+    </View>
+  );
+
   const quotaSnapshot = quotaQuery.data;
-  const quotaFetchedAt = quotaSnapshot?.fetchedAt
+  const updatedAt = quotaSnapshot?.fetchedAt
     ? new Date(quotaSnapshot.fetchedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
     : null;
 
   const analytics = analyticsQuery.data;
   const buckets = analytics?.buckets ?? [];
-  const selectedBucket =
+  const maxBucketTokens = buckets.reduce((max, b) => Math.max(max, b.totalTokens), 0);
+  const activeBucketIndex =
     selectedBucketIndex !== null && selectedBucketIndex < buckets.length
-      ? buckets[selectedBucketIndex]
-      : buckets.length > 0
-      ? buckets[buckets.length - 1]
-      : null;
-
-  function getBucketCardStyle(intensity: number, isSelected: boolean) {
-    let bg = "rgba(128, 128, 128, 0.08)";
-    let textColor = theme.colors.foregroundMuted;
-    let badgeColor = theme.colors.foregroundMuted;
-
-    if (intensity === 1) {
-      bg = "rgba(59, 130, 246, 0.18)";
-      badgeColor = theme.colors.accent;
-    } else if (intensity === 2) {
-      bg = "rgba(59, 130, 246, 0.35)";
-      textColor = theme.colors.foreground;
-      badgeColor = theme.colors.accent;
-    } else if (intensity === 3) {
-      bg = "rgba(59, 130, 246, 0.60)";
-      textColor = theme.colors.foreground;
-      badgeColor = theme.colors.accentForeground;
-    } else if (intensity === 4) {
-      bg = theme.colors.accent;
-      textColor = theme.colors.accentForeground;
-      badgeColor = theme.colors.accentForeground;
-    }
-
-    return {
-      style: [styles.dayCard, { backgroundColor: bg }, isSelected && styles.dayCardSelected],
-      textColor,
-      badgeColor,
-    };
-  }
+      ? selectedBucketIndex
+      : buckets.length - 1;
+  const activeBucket = activeBucketIndex >= 0 ? buckets[activeBucketIndex] : null;
+  const selectedModelLabel = selectedModel
+    ? analytics?.availableModels.find((m) => m.id === selectedModel)?.label ?? selectedModel
+    : null;
 
   return (
     <ScrollView testID="provider-usage-surface" style={styles.screen} contentContainerStyle={styles.content}>
-      {/* Top Header */}
       <View style={styles.header}>
-        <View>
+        <View style={{ flexShrink: 1 }}>
           <Text accessibilityRole="header" style={styles.title}>
-            Provider & Token Usage
+            Usage
           </Text>
-          <View style={styles.captionRow}>
-            <Text style={styles.caption}>
-              {quotaFetchedAt ? `Plan quotas updated ${quotaFetchedAt}` : "Claude, Codex, Antigravity, and Agent Telemetry"}
-            </Text>
-            {isUpdating ? (
-              <Text style={styles.captionUpdating} accessibilityLiveRegion="polite">
-                Updating…
-              </Text>
-            ) : null}
-          </View>
+          <Text style={styles.caption} accessibilityLiveRegion="polite">
+            {isUpdating ? "Updating…" : updatedAt ? `Updated ${updatedAt}` : "Plans and agent activity"}
+          </Text>
         </View>
-
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Refresh usage and analytics"
+          accessibilityLabel="Refresh usage"
           disabled={isUpdating}
           onPress={refreshAll}
-          style={({ pressed }) => [styles.refreshBtn, { opacity: isUpdating ? 0.5 : pressed ? 0.7 : 1 }]}
+          hitSlop={8}
+          style={({ pressed }) => ({ opacity: isUpdating ? 0.4 : pressed ? 0.6 : 1, paddingVertical: 2 })}
         >
-          <Text style={styles.refreshBtnText}>{isUpdating ? "Refreshing" : "Refresh"}</Text>
+          <Text style={styles.textButton}>Refresh</Text>
         </Pressable>
       </View>
 
-      {/* ==================================================================== */}
-      {/* SECTION 1: Plan Limits & Headroom (CodexBar)                          */}
-      {/* ==================================================================== */}
+      {/* Plans */}
       <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Plan Limits & Quota Headroom</Text>
-          <Text style={styles.sectionBadge}>CodexBar direct quota</Text>
-        </View>
+        <Text accessibilityRole="header" style={styles.sectionTitle}>
+          Plans
+        </Text>
 
         {!quotaSnapshot && quotaQuery.isLoading ? (
-          <View style={styles.stateBox} accessibilityLiveRegion="polite">
+          <View style={styles.state}>
             <ActivityIndicator color={theme.colors.accent} />
-            <Text style={styles.stateText}>Reading live quota windows…</Text>
           </View>
         ) : quotaQuery.isError && !quotaSnapshot ? (
-          <View style={styles.stateBox} accessibilityLiveRegion="assertive">
-            <Text style={{ color: theme.colors.statusDanger, fontSize: 12 }}>Quota windows could not be loaded.</Text>
-            <Text style={styles.stateText}>{quotaQuery.error.message}</Text>
-          </View>
+          <Text style={styles.danger}>Usage could not be loaded. {quotaQuery.error.message}</Text>
         ) : (
-          quotaSnapshot?.providers.map((provider: ProviderUsage, idx: number) => (
-            <View key={provider.id} style={styles.providerItem}>
-              {idx > 0 ? <View style={styles.providerDivider} /> : null}
-              <View style={styles.providerHeading}>
-                <Text style={styles.providerName}>{provider.name}</Text>
-                <Text style={styles.providerMeta}>
-                  {[provider.plan, provider.account].filter(Boolean).join(" · ") || "Account limits"}
-                </Text>
-              </View>
+          quotaSnapshot?.providers.map((provider, idx) => {
+            const spend = provider.spend;
+            const meta = [provider.plan, provider.account].filter(Boolean).join(" · ");
+            return (
+              <View key={provider.id} style={{ gap: 14 }}>
+                {idx > 0 ? divider : null}
+                <View style={styles.block}>
+                  <View style={styles.rowBetween}>
+                    <Text style={styles.name}>{provider.name}</Text>
+                    {meta ? (
+                      <Text style={styles.meta} numberOfLines={1}>
+                        {meta}
+                      </Text>
+                    ) : null}
+                  </View>
 
-              {provider.error ? (
-                <Text style={{ color: theme.colors.statusDanger, fontSize: 12 }}>{provider.error}</Text>
-              ) : null}
+                  {provider.error ? <Text style={styles.danger}>{provider.error}</Text> : null}
 
-              <View style={{ gap: 10 }}>
-                {provider.windows.map((window) => {
-                  const reset = resetLabel(window);
-                  const used = Math.round(window.usedPercent);
-                  return (
-                    <View key={window.id} style={{ gap: 5 }}>
-                      <View style={styles.windowRow}>
-                        <Text style={styles.windowLabel} numberOfLines={1}>
-                          {window.label}
-                          {reset ? <Text style={styles.windowReset}>{` (${reset})`}</Text> : null}
-                        </Text>
-                        <Text style={used >= CRITICAL_USED_PERCENT ? styles.percentageCritical : styles.percentage}>
-                          {used}%
-                        </Text>
+                  {provider.windows.map((window) => {
+                    const reset = resetLabel(window);
+                    const used = Math.round(window.usedPercent);
+                    const critical = used >= CRITICAL_USED_PERCENT;
+                    return (
+                      <View
+                        key={window.id}
+                        style={{ gap: 6 }}
+                        accessible
+                        accessibilityLabel={`${window.label}, ${used}% used${reset ? `, ${reset}` : ""}`}
+                      >
+                        <View style={styles.rowBetween}>
+                          <Text style={styles.label} numberOfLines={1}>
+                            {window.label}
+                            {reset ? <Text style={styles.subtle}>{`  ${reset}`}</Text> : null}
+                          </Text>
+                          <Text style={critical ? styles.valueCritical : styles.value}>{used}%</Text>
+                        </View>
+                        <ShareBar
+                          percent={window.usedPercent}
+                          color={critical ? theme.colors.statusDanger : theme.colors.accent}
+                          theme={theme}
+                        />
                       </View>
-                      <UsageBar usedPercent={window.usedPercent} theme={theme} />
+                    );
+                  })}
+
+                  {spend?.groups.map((group) => (
+                    <View key={group.title} style={{ gap: 6 }}>
+                      <Text style={styles.subtle}>{group.title}</Text>
+                      {group.rows.map((row) => (
+                        <View
+                          key={row.label}
+                          style={styles.rowBetween}
+                          accessible
+                          accessibilityLabel={`${row.label}: ${row.value}`}
+                        >
+                          <Text style={styles.label}>{row.label}</Text>
+                          <Text style={styles.value}>{row.value}</Text>
+                        </View>
+                      ))}
                     </View>
-                  );
-                })}
+                  ))}
+                  {spend?.note ? <Text style={styles.footnote}>{spend.note}</Text> : null}
+                </View>
               </View>
-            </View>
-          ))
+            );
+          })
         )}
       </View>
 
-      {/* ==================================================================== */}
-      {/* SECTION 2: Token Spend & Model Analytics                             */}
-      {/* ==================================================================== */}
+      {/* Agent activity */}
       <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Historical Token Activity</Text>
-          <Text style={styles.sectionBadge}>Agent sessions & turns</Text>
-        </View>
-
-        {/* Pricing Transparency Callout */}
-        <View style={styles.pricingBanner}>
-          <Text style={styles.pricingBannerText}>
-            <Text style={{ fontWeight: "700", color: theme.colors.foreground }}>Pricing Transparency: </Text>
-            Costs reflect standard direct provider API rates ($/1M tokens) and embedded session telemetry — no OpenRouter markup.
+        <View style={styles.rowBetween}>
+          <Text accessibilityRole="header" style={styles.sectionTitle}>
+            Agent activity
           </Text>
+          <View style={styles.segmented} accessibilityRole="tablist">
+            <Tint color={theme.colors.foreground} opacity={0.06} />
+            {RANGES.map((r) => {
+              const active = range === r;
+              return (
+                <Pressable
+                  key={r}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={r === "all" ? "All time" : `Last ${r}`}
+                  onPress={() => {
+                    setRange(r);
+                    setSelectedBucketIndex(null);
+                  }}
+                  style={styles.segment}
+                >
+                  {active ? <Tint color={theme.colors.surface0} opacity={1} /> : null}
+                  <Text style={active ? styles.segmentTextActive : styles.segmentText}>
+                    {r === "all" ? "All" : r}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
 
-        {/* Filter Controls: Range & Provider/Model */}
-        <View style={{ gap: 10 }}>
-          <View style={styles.filterBar}>
-            {(["24h", "7d", "14d", "30d", "all"] as const).map((r) => (
-              <Pressable
-                key={r}
-                onPress={() => {
-                  setRange(r);
-                  setSelectedBucketIndex(null);
-                }}
-                style={[styles.rangePill, range === r && styles.rangePillActive]}
-              >
-                <Text style={[styles.rangePillText, range === r && styles.rangePillTextActive]}>
-                  {r.toUpperCase()}
-                </Text>
-              </Pressable>
-            ))}
+        {selectedModelLabel ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Showing ${selectedModelLabel}. Show all models`}
+            onPress={() => setSelectedModel(undefined)}
+          >
+            <Text style={styles.subtle}>
+              Showing {selectedModelLabel} · <Text style={styles.textButton}>All models</Text>
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {analyticsQuery.isLoading ? (
+          <View style={styles.state}>
+            <ActivityIndicator color={theme.colors.accent} />
           </View>
+        ) : analyticsQuery.isError ? (
+          <Text style={styles.danger}>Activity could not be loaded. {analyticsQuery.error.message}</Text>
+        ) : analytics && analytics.summary.totalTokens > 0 ? (
+          <>
+            <View style={styles.stats}>
+              {[
+                { label: "Tokens", value: formatTokens(analytics.summary.totalTokens) },
+                { label: "Est. cost", value: formatCost(analytics.summary.estimatedCostUsd) },
+                { label: "Sessions", value: analytics.summary.sessionCount.toLocaleString() },
+              ].map((stat) => (
+                <View key={stat.label} accessible accessibilityLabel={`${stat.label}: ${stat.value}`}>
+                  <Text style={styles.statValue}>{stat.value}</Text>
+                  <Text style={styles.subtle}>{stat.label}</Text>
+                </View>
+              ))}
+            </View>
 
-          {/* Model and Provider Filter Chips */}
-          {analytics && (analytics.availableProviders.length > 1 || analytics.availableModels.length > 1) ? (
-            <View style={styles.filterBar}>
-              <Pressable
-                onPress={() => {
-                  setSelectedProvider(undefined);
-                  setSelectedModel(undefined);
-                }}
-                style={[styles.filterChip, !selectedProvider && !selectedModel && styles.filterChipActive]}
-              >
-                <Text style={[styles.filterChipText, !selectedProvider && !selectedModel && styles.filterChipTextActive]}>
-                  All Models
-                </Text>
-              </Pressable>
+            {buckets.length > 1 ? (
+              <View style={{ gap: 8 }}>
+                <View style={styles.chart}>
+                  {buckets.map((b, idx) => {
+                    const active = idx === activeBucketIndex;
+                    const height = maxBucketTokens > 0 ? (b.totalTokens / maxBucketTokens) * 100 : 0;
+                    return (
+                      <Pressable
+                        key={b.timestamp}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                        accessibilityLabel={`${b.label}: ${formatTokens(b.totalTokens)} tokens`}
+                        onPress={() => setSelectedBucketIndex(idx)}
+                        style={{ flex: 1, height: "100%", justifyContent: "flex-end" }}
+                      >
+                        <View
+                          style={{
+                            height: b.totalTokens > 0 ? `${Math.max(3, height)}%` : 2,
+                            borderRadius: 2,
+                            overflow: "hidden",
+                          }}
+                        >
+                          <Tint color={theme.colors.accent} opacity={active ? 1 : b.totalTokens > 0 ? 0.35 : 0.12} />
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                {activeBucket ? (
+                  <View style={styles.rowBetween}>
+                    <Text style={styles.label}>{activeBucket.label}</Text>
+                    <Text style={styles.subtle}>
+                      {formatTokens(activeBucket.totalTokens)} tokens · {formatCost(activeBucket.estimatedCostUsd)} ·{" "}
+                      {activeBucket.turnCount} turns
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
 
-              {analytics.availableModels.map((m) => {
-                const isSelected = selectedModel === m.id;
+            {divider}
+
+            <View style={{ gap: 14 }}>
+              {analytics.models.map((model) => {
+                const active = selectedModel === model.modelId;
                 return (
                   <Pressable
-                    key={m.id}
-                    onPress={() => setSelectedModel(isSelected ? undefined : m.id)}
-                    style={[styles.filterChip, isSelected && styles.filterChipActive]}
+                    key={model.modelId}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`${model.modelLabel}: ${formatTokens(model.totalTokens)} tokens, ${model.percentage}% share, ${formatCost(model.estimatedCostUsd)}`}
+                    onPress={() => setSelectedModel(active ? undefined : model.modelId)}
+                    style={({ pressed }) => ({ gap: 6, opacity: pressed ? 0.6 : 1 })}
                   >
-                    <Text style={[styles.filterChipText, isSelected && styles.filterChipTextActive]}>
-                      {m.label}
-                    </Text>
+                    <View style={styles.rowBetween}>
+                      <Text style={[styles.label, active && { fontWeight: "600" }]} numberOfLines={1}>
+                        {model.modelLabel}
+                      </Text>
+                      <Text style={styles.value}>
+                        {formatTokens(model.totalTokens)}
+                        <Text style={styles.subtle}>{`  ${formatCost(model.estimatedCostUsd)}`}</Text>
+                      </Text>
+                    </View>
+                    <ShareBar percent={model.percentage} color={theme.colors.accent} theme={theme} />
                   </Pressable>
                 );
               })}
             </View>
-          ) : null}
-        </View>
 
-        {/* Model Trajectory Comparison Bar */}
-        {analytics?.models && analytics.models.length > 0 && analytics.summary.totalTokens > 0 ? (
-          <View style={styles.trajectoryCard}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
-              <Text style={styles.trajectoryTitle}>Model Usage Comparison</Text>
-              <Text style={styles.caption}>{formatTokens(analytics.summary.totalTokens)} total tokens</Text>
-            </View>
-
-            {/* Segmented Stacked Bar */}
-            <View style={styles.stackedBarTrack}>
-              {analytics.models.map((m, idx) => {
-                if (m.percentage <= 0) return null;
-                return (
-                  <View
-                    key={m.modelId}
-                    style={{
-                      width: `${m.percentage}%`,
-                      backgroundColor: getModelColor(idx),
-                      height: "100%",
-                    }}
-                  />
-                );
-              })}
-            </View>
-
-            {/* Legend chips */}
-            <View style={styles.trajectoryLegend}>
-              {analytics.models.map((m, idx) => (
-                <Pressable
-                  key={m.modelId}
-                  onPress={() => setSelectedModel(selectedModel === m.modelId ? undefined : m.modelId)}
-                  style={styles.trajectoryLegendItem}
-                >
-                  <View style={[styles.legendDot, { backgroundColor: getModelColor(idx) }]} />
-                  <Text
-                    style={[
-                      styles.legendLabel,
-                      selectedModel === m.modelId && { color: theme.colors.foreground, fontWeight: "700" },
-                    ]}
-                  >
-                    {m.modelLabel} ({m.percentage}%)
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        ) : null}
-
-        {/* Activity Block Showcase (Calendar / Day Grid) */}
-        <View style={{ gap: 10 }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-            <Text style={styles.sectionTitle}>Activity Block Showcase</Text>
-            <Text style={styles.caption}>Tap any day to inspect details</Text>
-          </View>
-
-          {analyticsQuery.isLoading ? (
-            <View style={styles.stateBox}>
-              <ActivityIndicator color={theme.colors.accent} />
-              <Text style={styles.stateText}>Reading agent activity blocks…</Text>
-            </View>
-          ) : buckets.length > 0 ? (
-            <>
-              {/* Row of interactive day blocks */}
-              <View style={styles.blockRow}>
-                {buckets.map((b, idx) => {
-                  const isSelected = selectedBucket?.timestamp === b.timestamp;
-                  const { style, textColor, badgeColor } = getBucketCardStyle(b.intensity, isSelected);
-                  const parts = b.label.split(",");
-                  const dayHeader = parts[0] || b.label;
-                  const dateSub = parts[1]?.trim() || "";
-
-                  return (
-                    <Pressable
-                      key={b.timestamp}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${b.label}: ${formatTokens(b.totalTokens)} tokens`}
-                      onPress={() => setSelectedBucketIndex(idx)}
-                      style={style}
-                    >
-                      <Text style={[styles.dayName, { color: textColor }]}>{dayHeader}</Text>
-                      {dateSub ? <Text style={[styles.dayDate, { color: textColor }]}>{dateSub}</Text> : null}
-                      <Text style={[styles.dayVolumeBadge, { color: badgeColor }]}>
-                        {b.totalTokens > 0 ? formatTokens(b.totalTokens) : "—"}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-
-              {/* Selected Day Inspection Card */}
-              {selectedBucket ? (
-                <View style={styles.inspectionCard}>
-                  <View style={styles.inspectionHeader}>
-                    <Text style={styles.inspectionTitle}>{selectedBucket.label}</Text>
-                    <Text style={styles.inspectionCost}>
-                      {selectedBucket.estimatedCostUsd !== null ? `Est. ${formatCost(selectedBucket.estimatedCostUsd)}` : "No cost recorded"}
-                    </Text>
-                  </View>
-
-                  <View style={styles.inspectionStatsRow}>
-                    <Text style={styles.inspectionStatText}>
-                      Burn: <Text style={{ color: theme.colors.foreground, fontWeight: "600" }}>{formatTokens(selectedBucket.totalTokens)}</Text>
-                    </Text>
-                    <Text style={styles.inspectionStatText}>
-                      In: {formatTokens(selectedBucket.inputTokens)} · Out: {formatTokens(selectedBucket.outputTokens)} · Cache: {formatTokens(selectedBucket.cacheReadTokens)}
-                    </Text>
-                    <Text style={styles.inspectionStatText}>
-                      {selectedBucket.sessionCount} sessions · {selectedBucket.turnCount} turns
-                    </Text>
-                  </View>
-
-                  {selectedBucket.modelBreakdown.length > 0 ? (
-                    <View style={styles.inspectionModelList}>
-                      {selectedBucket.modelBreakdown.map((mb) => (
-                        <View key={mb.modelId} style={styles.inspectionModelRow}>
-                          <Text style={styles.inspectionModelName}>{mb.modelLabel}</Text>
-                          <Text style={styles.inspectionModelTokens}>
-                            {formatTokens(mb.totalTokens)} {mb.estimatedCostUsd ? `(${formatCost(mb.estimatedCostUsd)})` : ""}
-                          </Text>
-                        </View>
-                      ))}
-                    </View>
-                  ) : null}
-                </View>
-              ) : null}
-            </>
-          ) : (
-            <Text style={styles.stateText}>No activity recorded in this timeframe.</Text>
-          )}
-        </View>
-
-        {/* Model Breakdown List */}
-        <View style={{ gap: 10 }}>
-          <Text style={styles.sectionTitle}>Model Breakdown & Pricing Rates</Text>
-
-          {analytics?.models && analytics.models.length > 0 ? (
-            <View style={styles.modelList}>
-              {analytics.models.map((model, idx) => {
-                const color = getModelColor(idx);
-                return (
-                  <View key={model.modelId} style={styles.modelCard}>
-                    <View style={styles.modelTopRow}>
-                      <View style={styles.modelTitleWrap}>
-                        <View style={[styles.legendDot, { backgroundColor: color }]} />
-                        <Text style={styles.modelNameText}>{model.modelLabel}</Text>
-                        {model.pricingBasis ? (
-                          <Text style={styles.pricingBasisTag}>{model.pricingBasis}</Text>
-                        ) : null}
-                      </View>
-                      <Text style={styles.modelTokensText}>{formatTokens(model.totalTokens)}</Text>
-                    </View>
-
-                    {/* Progress Bar */}
-                    <View style={styles.modelProgressBar}>
-                      <View
-                        style={{
-                          width: `${Math.max(1, Math.min(100, model.percentage))}%`,
-                          height: "100%",
-                          backgroundColor: color,
-                        }}
-                      />
-                    </View>
-
-                    <View style={styles.modelDetailRow}>
-                      <Text style={styles.modelSubText}>
-                        {model.percentage}% share · {formatTokens(model.inputTokens)} in · {formatTokens(model.outputTokens)} out · {formatTokens(model.cacheReadTokens)} cache
-                      </Text>
-                      <Text style={styles.modelCostText}>{formatCost(model.estimatedCostUsd)}</Text>
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          ) : (
-            <Text style={styles.stateText}>No models discovered.</Text>
-          )}
-        </View>
+            <Text style={styles.footnote}>
+              Costs are estimates at direct provider API rates, not OpenRouter billing.
+              {analytics.coverage.unpricedTokens > 0
+                ? ` ${formatTokens(analytics.coverage.unpricedTokens)} tokens have no known price.`
+                : ""}
+            </Text>
+          </>
+        ) : (
+          <Text style={styles.subtle}>No agent activity in this range.</Text>
+        )}
       </View>
     </ScrollView>
   );

@@ -13,7 +13,7 @@ import {
 } from "../shared/usage";
 
 const execFileAsync = promisify(execFile);
-const providerIds = ["claude", "codex", "antigravity"] as const;
+const providerIds = ["claude", "codex", "antigravity", "openrouter"] as const;
 type ProviderId = (typeof providerIds)[number];
 
 type JsonObject = Record<string, unknown>;
@@ -22,6 +22,7 @@ const names: Record<ProviderId, string> = {
   claude: "Claude",
   codex: "Codex",
   antigravity: "Antigravity",
+  openrouter: "OpenRouter",
 };
 
 function object(value: unknown): JsonObject | null {
@@ -56,6 +57,45 @@ function addWindow(
     resetDescription: string(value.resetDescription),
     windowMinutes: number(value.windowMinutes),
   });
+}
+
+const openRouterSetup =
+  "OpenRouter is not configured in CodexBar. Run `codexbar config set-api-key --provider openrouter --stdin` " +
+  "and paste an OpenRouter API key, or set OPENROUTER_API_KEY for the Paseo daemon.";
+
+const openRouterManagementHint =
+  "Spend history needs an OpenRouter Management API key: run " +
+  "`codexbar config set-api-key --provider openrouter --stdin` and paste a Management key.";
+
+const compactNumber = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+
+/**
+ * Passes CodexBar's OpenRouter detail rows through as reported. With a Management key,
+ * the "API key" group describes the Management key itself (always $0), so it is dropped
+ * once account-wide Activity is available.
+ */
+function readSpend(usage: JsonObject | null): ProviderUsage["spend"] {
+  const details = (Array.isArray(usage?.details) ? usage.details : [])
+    .map(object)
+    .filter((detail): detail is JsonObject => detail !== null);
+  const hasActivity = details.some((detail) => string(detail.title)?.startsWith("Activity"));
+  const groups: NonNullable<ProviderUsage["spend"]>["groups"] = [];
+  let note: string | null = null;
+  for (const detail of details) {
+    const title = string(detail.title);
+    if (!title || (hasActivity && title === "API key")) continue;
+    const rows: NonNullable<ProviderUsage["spend"]>["groups"][number]["rows"] = [];
+    for (const item of Array.isArray(detail.rows) ? detail.rows : []) {
+      const row = object(item);
+      const label = string(row?.label);
+      const value = string(row?.value);
+      if (/management api key/i.test(string(row?.secondaryValue) ?? "")) note = openRouterManagementHint;
+      if (!label || !value || /unavailable/i.test(value)) continue;
+      rows.push({ label, value: /^\d+$/.test(value) ? compactNumber.format(Number(value)) : value });
+    }
+    if (rows.length > 0) groups.push({ title, rows });
+  }
+  return groups.length > 0 || note ? { groups, note } : null;
 }
 
 function normalize(providerId: ProviderId, payload: unknown): ProviderUsage {
@@ -102,11 +142,23 @@ function normalize(providerId: ProviderId, payload: unknown): ProviderUsage {
       string(usage?.accountEmail) ??
       string(identity?.accountEmail) ??
       string(root.account),
-    plan: string(usage?.plan) ?? string(usage?.planLabel) ?? string(identity?.loginMethod),
+    // OpenRouter's loginMethod is "Balance: $x", which the Credits rows already show.
+    plan:
+      providerId === "openrouter"
+        ? null
+        : string(usage?.plan) ?? string(usage?.planLabel) ?? string(identity?.loginMethod),
     updatedAt: string(usage?.updatedAt) ?? string(root.updatedAt),
     windows,
-    error: error ? string(error.message) ?? "Usage unavailable" : null,
+    error: error ? readError(providerId, string(error.message)) : null,
+    spend: providerId === "openrouter" ? readSpend(usage) : null,
   };
+}
+
+function readError(providerId: ProviderId, message: string | null): string {
+  if (providerId === "openrouter" && message && /OPENROUTER_API_KEY|API key field/.test(message)) {
+    return openRouterSetup;
+  }
+  return message ?? "Usage unavailable";
 }
 
 const ompProviders = {
@@ -202,7 +254,7 @@ async function resolveAuth(
   forceRefresh: boolean,
 ): Promise<ResolvedAuth> {
   const ambient: ResolvedAuth = { env: process.env, directory: null, source: "auto" };
-  if (providerId === "codex") return ambient;
+  if (providerId === "codex" || providerId === "openrouter") return ambient;
   try {
     const { env, directory } = await createCodexBarEnvironment(providerId, forceRefresh);
     return { env, directory, source: "oauth" };
@@ -279,6 +331,7 @@ async function runCodexBar(
       plan: null,
       updatedAt: null,
       windows: [],
+      spend: null,
       error:
         (error as NodeJS.ErrnoException).code === "ENOENT"
           ? codexBarInstallHint
@@ -691,6 +744,36 @@ async function discoverAllTurns(): Promise<{
   return { turns: allTurns, agentsDiscovered, sessionsParsed };
 }
 
+/** UTC instant of local midnight, in `timeZone`, for the day containing `timestamp`. */
+function startOfLocalDay(timestamp: number, timeZone: string): number {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+  });
+  const parts = (ts: number) => {
+    const values: Record<string, number> = {};
+    for (const part of formatter.formatToParts(ts)) {
+      if (part.type !== "literal") values[part.type] = Number(part.value);
+    }
+    return values;
+  };
+  const local = parts(timestamp);
+  const midnightAsUtc = Date.UTC(local.year, local.month - 1, local.day);
+  // Offset of the zone at a given instant: local wall-clock time read as UTC, minus the instant.
+  const offsetAt = (ts: number) => {
+    const p = parts(ts);
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(ts / 1000) * 1000;
+  };
+  const guess = midnightAsUtc - offsetAt(midnightAsUtc);
+  return midnightAsUtc - offsetAt(guess);
+}
+
 export async function handleTokenAnalytics(
   filter: TokenAnalyticsFilter,
 ): Promise<TokenAnalyticsResponse> {
@@ -750,13 +833,25 @@ export async function handleTokenAnalytics(
     startTime = now - bucketCount * 86400 * 1000;
   }
 
-  // Initialize empty timeline buckets so the heatmap grid has no missing days/hours
+  // Build every bucket up front so the chart has no gaps. Days start at local midnight in
+  // `timeZone` (DST-safe), and the final bucket always contains `now`.
   const buckets: TokenTimeBucket[] = [];
-  const stepMs = bucketGranularity === "hour" ? 3600 * 1000 : 86400 * 1000;
-  const alignedStart = Math.floor(startTime / stepMs) * stepMs;
+  const hourMs = 3600 * 1000;
+  const bucketStarts: number[] = [];
+  if (bucketGranularity === "hour") {
+    const currentHour = Math.floor(now / hourMs) * hourMs;
+    for (let i = bucketCount - 1; i >= 0; i--) bucketStarts.push(currentHour - i * hourMs);
+  } else {
+    const today = startOfLocalDay(now, timeZone);
+    // Step back from local noon so a 23- or 25-hour DST day never skips or repeats a date.
+    for (let i = bucketCount - 1; i >= 0; i--) {
+      bucketStarts.push(startOfLocalDay(today + 12 * hourMs - i * 86400 * 1000, timeZone));
+    }
+  }
+  const alignedStart = bucketStarts[0];
+  const stepMs = bucketGranularity === "hour" ? hourMs : 86400 * 1000;
 
-  for (let i = 0; i < bucketCount; i++) {
-    const slotTs = alignedStart + i * stepMs;
+  for (const slotTs of bucketStarts) {
     const d = new Date(slotTs);
     const label =
       bucketGranularity === "hour"
@@ -793,8 +888,9 @@ export async function handleTokenAnalytics(
       unpricedTokens += t.totalTokens;
     }
 
-    const bucketIdx = Math.floor((t.timestamp - alignedStart) / stepMs);
-    if (bucketIdx >= 0 && bucketIdx < buckets.length) {
+    let bucketIdx = bucketStarts.length - 1;
+    while (bucketIdx > 0 && bucketStarts[bucketIdx] > t.timestamp) bucketIdx--;
+    if (bucketStarts[bucketIdx] <= t.timestamp) {
       const b = buckets[bucketIdx];
       b.totalTokens += t.totalTokens;
       b.inputTokens += t.inputTokens;
@@ -836,8 +932,8 @@ export async function handleTokenAnalytics(
 
   // Compute session count per bucket
   for (let i = 0; i < buckets.length; i++) {
-    const slotTs = alignedStart + i * stepMs;
-    const slotEnd = slotTs + stepMs;
+    const slotTs = bucketStarts[i];
+    const slotEnd = bucketStarts[i + 1] ?? slotTs + stepMs;
     const sessionsInBucket = new Set(
       matchingTurns.filter((t) => t.timestamp >= slotTs && t.timestamp < slotEnd).map((t) => t.sessionId),
     );
