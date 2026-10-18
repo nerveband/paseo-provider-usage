@@ -13,7 +13,7 @@ import {
 } from "../shared/usage";
 
 const execFileAsync = promisify(execFile);
-const providerIds = ["claude", "codex", "antigravity", "openrouter"] as const;
+const providerIds = ["claude", "codex", "antigravity", "commandcode", "openrouter"] as const;
 type ProviderId = (typeof providerIds)[number];
 
 type JsonObject = Record<string, unknown>;
@@ -22,6 +22,7 @@ const names: Record<ProviderId, string> = {
   claude: "Claude",
   codex: "Codex",
   antigravity: "Antigravity",
+  commandcode: "Command Code",
   openrouter: "OpenRouter",
 };
 
@@ -108,7 +109,9 @@ function normalize(providerId: ProviderId, payload: unknown): ProviderUsage {
     const labels =
       providerId === "antigravity"
         ? { primary: "Gemini", secondary: "Claude + GPT", tertiary: "Monthly" }
-        : { primary: "Session", secondary: "Weekly", tertiary: "Monthly" };
+        : providerId === "commandcode"
+          ? { primary: "5-hour", secondary: "Weekly", tertiary: "Monthly" }
+          : { primary: "Session", secondary: "Weekly", tertiary: "Monthly" };
     addWindow(windows, "primary", labels.primary, usage.primary);
     addWindow(windows, "secondary", labels.secondary, usage.secondary);
     addWindow(windows, "tertiary", labels.tertiary, usage.tertiary);
@@ -247,14 +250,16 @@ type ResolvedAuth = { env: NodeJS.ProcessEnv; directory: string | null; source: 
 /**
  * Codex is read from its own CLI session. Claude and Antigravity are read with an OAuth
  * token borrowed from OMP; when OMP is not installed or cannot mint one, fall back to
- * CodexBar's own provider strategies instead of failing the row.
+ * CodexBar's own provider strategies instead of failing the row. Command Code is read with
+ * the API key stored in CodexBar's own configuration.
  */
 async function resolveAuth(
   providerId: ProviderId,
   forceRefresh: boolean,
 ): Promise<ResolvedAuth> {
   const ambient: ResolvedAuth = { env: process.env, directory: null, source: "auto" };
-  if (providerId === "codex" || providerId === "openrouter") return ambient;
+  if (providerId === "codex" || providerId === "openrouter" || providerId === "commandcode")
+    return ambient;
   try {
     const { env, directory } = await createCodexBarEnvironment(providerId, forceRefresh);
     return { env, directory, source: "oauth" };
@@ -504,6 +509,7 @@ function formatProviderLabel(providerId: string): string {
     "google-antigravity": "Antigravity",
     antigravity: "Antigravity",
     opencode: "OpenCode",
+    commandcode: "Command Code",
     pi: "Pi",
   };
   return map[providerId.toLowerCase()] ?? providerId;
