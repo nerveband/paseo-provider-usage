@@ -9,6 +9,7 @@
     "url": "https://github.com/nerveband/paseo-provider-usage.git"
   },
   "scripts": {
+    "test": "node --test tests/*.test.cjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
@@ -19,6 +20,12 @@
     "react": "19.1.0",
     "react-native": "0.81.5",
     "typescript": "^5.9.3",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "braces": "file:vendor/braces",
+    "sprintf-js": "file:vendor/sprintf-js"
+  },
+  "overrides": {
+    "braces": "$braces",
+    "sprintf-js": "$sprintf-js"
   }
 }

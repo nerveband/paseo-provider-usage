@@ -75,11 +75,13 @@ paseo plugin ls
 Check and apply updates:
 
 ```bash
-paseo plugin status provider-usage
+paseo plugin ls provider-usage
 paseo plugin update provider-usage
 ```
 
-For local development, clone the repository, run `npm install` and `npm run typecheck`, then use `paseo plugin install "$PWD"`.
+For local development, clone the repository, run `npm ci`, `npm run typecheck`, and `npm test`,
+then use `paseo plugin install "$PWD"`. Keep the `vendor/` directory: the lockfile uses its local
+security patches.
 
 Open the app and pick **Usage** in the sidebar, or run the **Open plan usage** action from the
 Command Center (`Ctrl`/`Cmd` + `K`).
@@ -93,8 +95,8 @@ daemon; that stops running agents.
 | --- | --- |
 | `CODEXBAR_BIN` | Absolute path to the CodexBar CLI. Defaults to the first `codexbar` found on `PATH`, `~/.local/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`. |
 
-Providers, refresh cadence, and thresholds are code-level constants in `usage.server.ts` and
-`main.client.tsx`.
+Providers, refresh cadence, and thresholds are code-level constants in [server/usage.ts](server/usage.ts)
+and [client/main.tsx](client/main.tsx).
 
 ## Refresh behavior
 
@@ -105,7 +107,7 @@ no snapshot yet.
 
 The snapshot is written to `$XDG_STATE_HOME/paseo-provider-usage/snapshot.json` (default
 `~/.local/state/...`) with mode `0600`, so a daemon or plugin reload still paints instantly. It
-holds usage numbers, reset times, and the account label — never a token.
+holds usage numbers, reset times, and the account label, never a token.
 
 Provider quota endpoints are rate limited per account, so fetching stays deliberately quiet:
 
@@ -120,6 +122,15 @@ Claude's OAuth token is read from OMP's cache first. A forced token refresh mint
 token and invalidates the previous one, so it is used only after the provider rejects the cached
 token.
 
+## Activity loading
+
+Activity requests share one history scan while it is running. The scan reads at most eight
+agent or session files at once, reuses unchanged parsed sessions, and saves the analytics
+index only when sessions change. Growing logs resume from the last parsed line, so an append
+does not reparse the whole transcript. Incomplete final records are re-read, and truncated
+or replaced logs are rebuilt. A model or range change still checks current agent files.
+These local history reads do not change provider quota fetching or its rate limits.
+
 ## Security
 
 - Backend plugin code is trusted and unsandboxed; it runs beside your Paseo daemon.
@@ -127,24 +138,36 @@ token.
   that is deleted after each fetch.
 - Tokens are never logged, printed, or written into this repository.
 - A failing provider degrades to a message on its own row; the other providers keep rendering.
+- Unstructured CLI diagnostics are replaced with safe messages before reaching the sidebar or
+  saved snapshot. Missing-CLI guidance, timeouts, and structured provider errors remain useful.
+- Two transitive development dependencies use local security patches through npm overrides.
+  See [vendor/README.md](vendor/README.md) for the advisories, changes, licenses, and upstream
+  replacement guidance. React and React Native stay compatible with the Paseo SDK.
 
 ## Development
 
 ```bash
 npm run typecheck                      # required before install or reload
+npm test                               # loading, error handling, and dependency security regressions
+npm audit                              # audit the installed dependency tree
 paseo plugin reload provider-usage     # apply source edits
 paseo plugin logs provider-usage       # backend stdout/stderr
 ```
 
 | File | Role |
 | --- | --- |
-| `index.ts` | Registers the RPC handler, surface, sidebar item, and Command Center action. |
-| `usage.shared.ts` | Zod contract shared by both runtimes. |
-| `usage.server.ts` | Token bridge, CodexBar invocation, normalization, caching. |
-| `main.client.tsx` | The React Native surface. |
+| [index.server.ts](index.server.ts) | Registers the backend RPC handlers. |
+| [index.client.tsx](index.client.tsx) | Registers the surface, sidebar item, and Command Center action. |
+| [shared/usage.ts](shared/usage.ts) | Zod contracts shared by both runtimes. |
+| [server/usage.ts](server/usage.ts) | Token bridge, CodexBar invocation, normalization, caching, and analytics. |
+| [client/main.tsx](client/main.tsx) | The React Native surface. |
+| [tests/](tests/) | Activity loading, CLI error handling, and dependency security regression tests. |
+| [vendor/](vendor/) | Licensed local security patches for transitive development dependencies. |
 
-Verified on Linux (`x86_64`) against Paseo daemon 0.5.2 and CodexBar 0.55.1, in light and dark
-themes at desktop and compact widths.
+The security changes were validated on macOS (`arm64`) with Paseo 0.12.0 and Node.js 24.21.0:
+typechecking, all fourteen regression tests, a clean `npm ci` install, and `npm audit` passed.
+UI changes must also be checked in a real client, in light and dark themes at desktop and
+compact widths.
 
 ## Credits
 

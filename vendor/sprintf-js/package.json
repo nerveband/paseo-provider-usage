@@ -1,0 +1,8 @@
+{
+  "name": "@paseo-provider-usage/sprintf-js",
+  "version": "1.0.3-paseo.1",
+  "private": true,
+  "description": "Local security-patched fork of sprintf-js 1.0.3",
+  "license": "BSD-3-Clause",
+  "main": "src/sprintf.js"
+}

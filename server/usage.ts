@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { access, constants, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   usageSnapshotSchema,
@@ -335,7 +336,12 @@ async function runCodexBar(
       error:
         (error as NodeJS.ErrnoException).code === "ENOENT"
           ? codexBarInstallHint
-          : error.message || "Usage unavailable",
+          : error.message === codexBarInstallHint
+            ? codexBarInstallHint
+            : (error as NodeJS.ErrnoException).code === "ETIMEDOUT" ||
+                (error as Error & { killed?: boolean }).killed
+              ? "CodexBar usage request timed out. Try refreshing later."
+              : "CodexBar could not load usage. Check its configuration and try again.",
     };
   } finally {
     if (temporaryDirectory) {
@@ -537,6 +543,12 @@ interface SessionCacheEntry {
   mtimeMs: number;
   size: number;
   turns: NormalizedTurn[];
+  inode?: number;
+  resumeOffset?: number;
+  resumeLine?: number;
+  resumeModel?: string;
+  resumeProvider?: string;
+  tailTurnCount?: number;
 }
 
 const analyticsCachePath = join(
@@ -546,6 +558,7 @@ const analyticsCachePath = join(
 );
 
 const sessionFileCache = new Map<string, SessionCacheEntry>();
+let analyticsCacheDirty = false;
 let analyticsRestored = false;
 
 async function restoreAnalyticsCache(): Promise<void> {
@@ -588,14 +601,38 @@ async function parseSessionFile(
       return cachedEntry.turns;
     }
 
-    const raw = await readFile(filePath, "utf8");
+    const append = cachedEntry && fileStat.size > cachedEntry.size &&
+      cachedEntry.inode === fileStat.ino && cachedEntry.resumeOffset !== undefined &&
+      cachedEntry.resumeLine !== undefined && cachedEntry.resumeModel !== undefined &&
+      cachedEntry.resumeProvider !== undefined && cachedEntry.tailTurnCount !== undefined
+      ? cachedEntry : null;
+    const readOffset = append?.resumeOffset ?? 0;
+    let raw = "";
+    if (fileStat.size > readOffset) {
+      // Bound the read to this snapshot and re-read any incomplete final line.
+      const stream = createReadStream(filePath, {
+        encoding: "utf8", start: readOffset, end: fileStat.size - 1,
+      });
+      for await (const chunk of stream) raw += chunk;
+    }
     const lines = raw.split("\n");
-    const turns: NormalizedTurn[] = [];
-    let currentModel = defaultModel;
-    let currentProvider = defaultProvider;
+    const baseLine = append?.resumeLine ?? 0;
+    const turns: NormalizedTurn[] = append
+      ? append.turns.slice(0, append.turns.length - append.tailTurnCount!) : [];
+    let currentModel = append?.resumeModel ?? defaultModel;
+    let currentProvider = append?.resumeProvider ?? defaultProvider;
+    let resumeModel = currentModel;
+    let resumeProvider = currentProvider;
+    let turnsBeforeTail = turns.length;
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      if (lineIndex === lines.length - 1) {
+        resumeModel = currentModel;
+        resumeProvider = currentProvider;
+        turnsBeforeTail = turns.length;
+      }
+      const i = baseLine + lineIndex;
+      const line = lines[lineIndex].trim();
       if (!line) continue;
 
       if (line.includes('"type":"model_change"')) {
@@ -657,10 +694,17 @@ async function parseSessionFile(
       }
     }
 
+    analyticsCacheDirty = true;
     sessionFileCache.set(filePath, {
       mtimeMs: fileStat.mtimeMs,
       size: fileStat.size,
       turns,
+      inode: fileStat.ino,
+      resumeOffset: readOffset + Buffer.byteLength(raw.slice(0, raw.lastIndexOf("\n") + 1)),
+      resumeLine: baseLine + lines.length - 1,
+      resumeModel,
+      resumeProvider,
+      tailTurnCount: turns.length - turnsBeforeTail,
     });
     return turns;
   } catch {
@@ -668,16 +712,30 @@ async function parseSessionFile(
   }
 }
 
-async function discoverAllTurns(): Promise<{
+type DiscoveredTurns = {
   turns: NormalizedTurn[];
   agentsDiscovered: number;
   sessionsParsed: number;
-}> {
+};
+
+let analyticsDiscovery: Promise<DiscoveredTurns> | null = null;
+
+function discoverAllTurns(): Promise<DiscoveredTurns> {
+  if (!analyticsDiscovery) {
+    analyticsDiscovery = scanAllTurns().finally(() => {
+      analyticsDiscovery = null;
+    });
+  }
+  return analyticsDiscovery;
+}
+
+async function scanAllTurns(): Promise<DiscoveredTurns> {
   const allTurns: NormalizedTurn[] = [];
   let agentsDiscovered = 0;
   let sessionsParsed = 0;
   await restoreAnalyticsCache();
   const agentsRoot = join(homedir(), ".paseo", "agents");
+  const agentPaths: string[] = [];
 
   try {
     const subdirs = await readdir(agentsRoot, { withFileTypes: true });
@@ -687,60 +745,72 @@ async function discoverAllTurns(): Promise<{
       try {
         const files = await readdir(workspaceDir);
         for (const file of files) {
-          if (!file.endsWith(".json")) continue;
-          agentsDiscovered++;
-          const agentPath = join(workspaceDir, file);
-          try {
-            const rawAgent = await readFile(agentPath, "utf8");
-            const agent = JSON.parse(rawAgent);
-            const agentId = String(agent.id || file.replace(/\.json$/, ""));
-            const defaultModel = String(agent.config?.model || agent.runtimeInfo?.model || "default");
-            const defaultProvider = String(agent.provider || "omp");
-            const handle = agent.persistence?.nativeHandle;
-
-            let turns: NormalizedTurn[] = [];
-            if (handle && typeof handle === "string") {
-              turns = await parseSessionFile(handle, defaultModel, defaultProvider, agentId);
-              if (turns.length > 0) sessionsParsed++;
-            }
-
-            if (turns.length === 0 && agent.lastUsage) {
-              const u = agent.lastUsage;
-              const input = Number(u.inputTokens) || 0;
-              const output = Number(u.outputTokens) || 0;
-              const cacheRead = Number(u.cachedInputTokens) || 0;
-              const total = input + output + cacheRead;
-              if (total > 0) {
-                const ts = Date.parse(agent.updatedAt || agent.createdAt || "") || Date.now();
-                const costUsd = typeof u.totalCostUsd === "number" ? u.totalCostUsd : calculateTurnCost(defaultModel, input, output, cacheRead, 0, null);
-                turns.push({
-                  id: `${agentId}_lastUsage`,
-                  sessionId: agentId,
-                  timestamp: ts,
-                  providerId: defaultProvider,
-                  providerLabel: formatProviderLabel(defaultProvider),
-                  modelId: defaultModel,
-                  modelLabel: formatModelLabel(defaultModel),
-                  inputTokens: input,
-                  outputTokens: output,
-                  cacheReadTokens: cacheRead,
-                  cacheWriteTokens: 0,
-                  totalTokens: total,
-                  costUsd,
-                });
-              }
-            }
-
-            for (const t of turns) {
-              allTurns.push(t);
-            }
-          } catch {}
+          if (file.endsWith(".json")) agentPaths.push(join(workspaceDir, file));
         }
       } catch {}
     }
   } catch {}
 
-  void persistAnalyticsCache();
+  // Bound filesystem concurrency, including when most agents share one workspace.
+  let nextAgent = 0;
+  await Promise.all(Array.from({ length: Math.min(8, agentPaths.length) }, async () => {
+    while (nextAgent < agentPaths.length) {
+      const agentPath = agentPaths[nextAgent++];
+      const file = basename(agentPath);
+      agentsDiscovered++;
+      try {
+        const rawAgent = await readFile(agentPath, "utf8");
+        const agent = JSON.parse(rawAgent);
+        const agentId = String(agent.id || file.replace(/\.json$/, ""));
+        const defaultModel = String(agent.config?.model || agent.runtimeInfo?.model || "default");
+        const defaultProvider = String(agent.provider || "omp");
+        const handle = agent.persistence?.nativeHandle;
+
+        let turns: NormalizedTurn[] = [];
+        if (handle && typeof handle === "string") {
+          turns = await parseSessionFile(handle, defaultModel, defaultProvider, agentId);
+          if (turns.length > 0) sessionsParsed++;
+        }
+
+        if (turns.length === 0 && agent.lastUsage) {
+          const u = agent.lastUsage;
+          const input = Number(u.inputTokens) || 0;
+          const output = Number(u.outputTokens) || 0;
+          const cacheRead = Number(u.cachedInputTokens) || 0;
+          const total = input + output + cacheRead;
+          if (total > 0) {
+            const ts = Date.parse(agent.updatedAt || agent.createdAt || "") || Date.now();
+            const costUsd = typeof u.totalCostUsd === "number" ? u.totalCostUsd : calculateTurnCost(defaultModel, input, output, cacheRead, 0, null);
+            turns.push({
+              id: `${agentId}_lastUsage`,
+              sessionId: agentId,
+              timestamp: ts,
+              providerId: defaultProvider,
+              providerLabel: formatProviderLabel(defaultProvider),
+              modelId: defaultModel,
+              modelLabel: formatModelLabel(defaultModel),
+              inputTokens: input,
+              outputTokens: output,
+              cacheReadTokens: cacheRead,
+              cacheWriteTokens: 0,
+              totalTokens: total,
+              costUsd,
+            });
+          }
+        }
+
+        for (const t of turns) {
+          allTurns.push(t);
+        }
+      } catch {}
+    }
+  }));
+
+  // A filter change that reuses unchanged sessions should not serialize the entire index.
+  if (analyticsCacheDirty) {
+    analyticsCacheDirty = false;
+    void persistAnalyticsCache();
+  }
   return { turns: allTurns, agentsDiscovered, sessionsParsed };
 }
 
