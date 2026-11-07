@@ -1,17 +1,18 @@
 # Paseo plan usage
 
-A [Paseo](https://paseo.sh) plugin that shows your Claude, Codex, Antigravity, and OpenRouter usage in the sidebar. One click, no menus, no extra window.
+A [Paseo](https://paseo.sh) plugin that shows your Claude, Codex, Antigravity, OpenRouter, and OpenCode Go usage in the sidebar. One click, no menus, no extra window.
 
-![The Usage screen showing Claude, Codex, Antigravity, and OpenRouter usage above agent activity](docs/screenshot.png)
+![The Usage screen showing Claude, Codex, Antigravity, OpenRouter, and OpenCode Go usage above agent activity](docs/screenshot.png)
 
-Each row is one usage limit. It shows the name, when it resets, how much you've used, and a bar. Rows turn red at 90% or more. The account line shows the plan, the account, and where the numbers came from.
+Each row is one usage limit. It shows the name, when it resets, how much you've used, and a bar. Rows turn red at 90% or more. The account line shows the plan, the account, and where the numbers came from when the provider reports them. Credit and balance rows appear under providers that return them.
 
-Paseo already has some of this, but it's hidden in a tooltip and a settings page. This plugin keeps it in one place you can reach from the keyboard, and adds Antigravity, which Paseo doesn't show.
+Paseo already has some of this, but it's hidden in a tooltip and a settings page. This plugin keeps it in one place you can reach from the keyboard, and adds Antigravity and OpenCode Go, which Paseo doesn't show.
 
 ## What you see
 
-- **Plans.** Session, weekly, and monthly limits for Claude, Codex, and Antigravity, with reset times.
-- **OpenRouter.** Credit left, used, and added, plus 30 days of activity (tokens, requests, and models).
+- **Plans.** Session, weekly, and monthly limits for Claude, Codex, Antigravity, and OpenCode Go, with reset times. Plan names appear when CodexBar reports one.
+- **Credits and balances.** Codex credits, extra-usage balance, and rate-limit reset credits; OpenRouter credit left, used, and added. Providers that do not report a credit field show no invented number.
+- **OpenRouter.** Account-wide spend and 30 days of activity (tokens, requests, and model count). CodexBar does not expose per-model OpenRouter spend, so the plugin cannot show it.
 - **Agent activity.** Tokens, estimated cost, and sessions for the last 24 hours, 7, 14, or 30 days, or all time. Tap a bar in the chart to see that day, or tap a model to show only that model.
 
 Some internal lanes, like `gpt-reserve`, are hidden. They copy a real limit and aren't something you plan around.
@@ -24,8 +25,9 @@ The plugin uses the [CodexBar](https://github.com/steipete/CodexBar) command-lin
 | --- | --- |
 | Codex | The Codex CLI's own login. |
 | Claude | A login token from [OMP](https://paseo.sh/omp), or CodexBar's own methods if OMP isn't installed. |
-| Antigravity | The same OMP login, or CodexBar's Antigravity checks, the `agy` CLI, or Google login. |
+| Antigravity | CodexBar's ambient source first: its Antigravity checks, the `agy` CLI, or Google login. An OMP token is only a fallback when that fails, because an OMP token reports the free tier while the ambient source reports the paid quota. |
 | OpenRouter | The API key saved in CodexBar, or `OPENROUTER_API_KEY`. |
+| OpenCode Go | The local OpenCode Go session that CodexBar reads. Limits are marked as estimated. |
 
 No app window opens. You don't need the Antigravity app or an `agy` session running.
 
@@ -35,13 +37,13 @@ No app window opens. You don't need the Antigravity app or an `agy` session runn
 codexbar config set-api-key --provider openrouter --stdin   # paste the key, then press Ctrl-D
 ```
 
-A normal key shows credits and that key's own spending. A Management key also shows 30 days of activity for the whole account. CodexBar doesn't report spending per model, so the plugin can't show it.
+A normal key shows credits and that key's own spending. A Management key also shows 30 days of activity for the whole account. CodexBar reports account-wide spend and a model count, not spending per model, so the plugin can't show a per-model dollar split.
 
 ## Requirements
 
 - Paseo 0.15.0 or later.
 - The CodexBar CLI (`codexbar`). Put it on your `PATH` or in `~/.local/bin`, or set `CODEXBAR_BIN` to its full path. Get it from [CodexBar releases](https://github.com/steipete/CodexBar/releases) (macOS and Linux).
-- Optional: OMP signed in to `anthropic` and `google-antigravity`, for the Claude and Antigravity rows.
+- Optional: OMP signed in to `anthropic` for the Claude row, and to `google-antigravity` as an Antigravity fallback.
 
 ## Install
 

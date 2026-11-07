@@ -14,7 +14,7 @@ import {
 } from "../shared/usage";
 
 const execFileAsync = promisify(execFile);
-const providerIds = ["claude", "codex", "antigravity", "openrouter"] as const;
+const providerIds = ["claude", "codex", "antigravity", "openrouter", "opencodego"] as const;
 type ProviderId = (typeof providerIds)[number];
 
 type JsonObject = Record<string, unknown>;
@@ -24,6 +24,7 @@ const names: Record<ProviderId, string> = {
   codex: "Codex",
   antigravity: "Antigravity",
   openrouter: "OpenRouter",
+  opencodego: "OpenCode Go",
 };
 
 function object(value: unknown): JsonObject | null {
@@ -99,23 +100,131 @@ function readSpend(usage: JsonObject | null): ProviderUsage["spend"] {
   return groups.length > 0 || note ? { groups, note } : null;
 }
 
+const creditNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+
+function formatCreditAmount(value: number, currency: string | null): string {
+  return `${creditNumber.format(value)}${currency ? ` ${currency}` : ""}`;
+}
+
+function formatExpiry(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+/**
+ * Turns CodexBar's credit fields into the same label/value groups the client already
+ * renders for OpenRouter. Providers without credit fields stay silent rather than
+ * showing an invented zero.
+ */
+function readProviderSpend(providerId: ProviderId, usage: JsonObject | null): ProviderUsage["spend"] {
+  const groups: NonNullable<ProviderUsage["spend"]>["groups"] = [];
+  const notes: string[] = [];
+
+  if (providerId === "openrouter") {
+    const detailSpend = readSpend(usage);
+    if (detailSpend) {
+      groups.push(...detailSpend.groups);
+      if (detailSpend.note) notes.push(detailSpend.note);
+    }
+    const details = (Array.isArray(usage?.details) ? usage.details : [])
+      .map(object)
+      .filter((detail): detail is JsonObject => detail !== null);
+    if (details.some((detail) => string(detail.title)?.startsWith("Activity"))) {
+      notes.push("CodexBar reports account-wide OpenRouter spend and a model count, not per-model spend.");
+    }
+  }
+
+  const cost = object(usage?.providerCost);
+  const credits = object(usage?.credits);
+  const resetCredits = object(usage?.codexResetCredits);
+
+  if (cost) {
+    const currency = string(cost.currencyCode);
+    const balance = number(cost.balance);
+    const used = number(cost.used);
+    const limit = number(cost.limit);
+    const period = string(cost.period);
+    const title = currency && /credit/i.test(currency) ? currency : period ?? "Balance";
+    const rows: NonNullable<ProviderUsage["spend"]>["groups"][number]["rows"] = [];
+    if (balance !== null) {
+      rows.push({ label: "Remaining", value: formatCreditAmount(balance, currency === title ? null : currency) });
+    }
+    if (used !== null && used > 0) {
+      rows.push({ label: "Used", value: formatCreditAmount(used, currency === title ? null : currency) });
+    }
+    if (limit !== null && limit > 0) {
+      rows.push({ label: "Limit", value: formatCreditAmount(limit, currency === title ? null : currency) });
+    }
+    if (period && period !== title) rows.push({ label: "Period", value: period });
+    if (rows.length > 0) groups.push({ title, rows });
+  } else if (credits) {
+    const remaining = number(credits.remaining);
+    const currency = string(credits.currencyCode) ?? "Credits";
+    if (remaining !== null) {
+      groups.push({
+        title: "Credits",
+        rows: [{ label: "Remaining", value: formatCreditAmount(remaining, null) }],
+      });
+    }
+    if (credits.creditsAvailable === false) notes.push("Credits are not available for this account.");
+  }
+
+  if (resetCredits) {
+    const availableCount = number(resetCredits.availableCount);
+    const creditsList = (Array.isArray(resetCredits.credits) ? resetCredits.credits : [])
+      .map(object)
+      .filter((credit): credit is JsonObject => credit !== null);
+    const expiries = creditsList
+      .map((credit) => string(credit.expires_at))
+      .filter((expiry): expiry is string => expiry !== null)
+      .sort();
+    const rows: NonNullable<ProviderUsage["spend"]>["groups"][number]["rows"] = [];
+    if (availableCount !== null) rows.push({ label: "Available", value: creditNumber.format(availableCount) });
+    if (expiries[0]) rows.push({ label: "Next expiry", value: formatExpiry(expiries[0]) });
+    if (rows.length > 0) groups.push({ title: "Rate limit resets", rows });
+  }
+
+  if (providerId === "claude" || providerId === "antigravity") {
+    if (groups.length === 0) {
+      notes.push("CodexBar reports neither a plan tier nor a credit balance for this account.");
+    }
+  }
+
+  if (providerId === "opencodego") {
+    notes.push("Limits are estimated from local OpenCode Go activity.");
+    notes.push("CodexBar does not report a plan tier or credit balance for OpenCode Go.");
+  }
+
+  if (groups.length === 0 && notes.length === 0) return null;
+  return { groups, note: notes.length > 0 ? notes.join(" ") : null };
+}
+
 function normalize(providerId: ProviderId, payload: unknown): ProviderUsage {
   const root = object(payload) ?? {};
   const error = object(root.error);
   const usage = object(root.usage);
+  const rateLabels = object(root.rateWindowLabels);
   const windows: ProviderUsage["windows"] = [];
 
   if (usage) {
     const labels =
       providerId === "antigravity"
-        ? { primary: "Gemini", secondary: "Claude + GPT", tertiary: "Monthly" }
-        : { primary: "Session", secondary: "Weekly", tertiary: "Monthly" };
-    addWindow(windows, "primary", labels.primary, usage.primary);
-    addWindow(windows, "secondary", labels.secondary, usage.secondary);
-    addWindow(windows, "tertiary", labels.tertiary, usage.tertiary);
+        ? {
+            primary: string(rateLabels?.primary) ?? "Gemini",
+            secondary: string(rateLabels?.secondary) ?? "Claude + GPT",
+            tertiary: string(rateLabels?.tertiary) ?? "Monthly",
+          }
+        : {
+            primary: string(rateLabels?.primary) ?? "Session",
+            secondary: string(rateLabels?.secondary) ?? "Weekly",
+            tertiary: string(rateLabels?.tertiary) ?? "Monthly",
+          };
 
-    if (providerId !== "antigravity") {
-      const extra = Array.isArray(usage.extraRateWindows) ? usage.extraRateWindows : [];
+    const extra = Array.isArray(usage.extraRateWindows) ? usage.extraRateWindows : [];
+    const addExtraWindows = (): void => {
+      const seenLabels = new Set(windows.map((window) => window.label.toLowerCase()));
       for (const item of extra) {
         const entry = object(item);
         if (!entry) continue;
@@ -124,13 +233,28 @@ function normalize(providerId: ProviderId, payload: unknown): ProviderUsage {
         // title is an identifier rather than a quota name. Those mirror the main window
         // and are not user-facing limits, so keep them out of the surface.
         if (title && !/\s/.test(title) && /[-_]/.test(title)) continue;
+        const label = title ?? "Additional limit";
+        if (seenLabels.has(label.toLowerCase())) continue;
+        seenLabels.add(label.toLowerCase());
         addWindow(
           windows,
           string(entry.id) ?? `extra-${windows.length}`,
-          title ?? "Additional limit",
+          label,
           entry.window,
         );
       }
+    };
+
+    // Antigravity's real quota lanes arrive in extraRateWindows; its primary/secondary
+    // windows only repeat two of them. Use the labelled lanes directly so the weekly
+    // Gemini limit and both model families all render.
+    if (providerId === "antigravity" && extra.length > 0) {
+      addExtraWindows();
+    } else {
+      addWindow(windows, "primary", labels.primary, usage.primary);
+      addWindow(windows, "secondary", labels.secondary, usage.secondary);
+      addWindow(windows, "tertiary", labels.tertiary, usage.tertiary);
+      addExtraWindows();
     }
   }
 
@@ -147,11 +271,14 @@ function normalize(providerId: ProviderId, payload: unknown): ProviderUsage {
     plan:
       providerId === "openrouter"
         ? null
-        : string(usage?.plan) ?? string(usage?.planLabel) ?? string(identity?.loginMethod),
+        : string(usage?.plan) ??
+          string(usage?.planLabel) ??
+          string(usage?.loginMethod) ??
+          string(identity?.loginMethod),
     updatedAt: string(usage?.updatedAt) ?? string(root.updatedAt),
     windows,
     error: error ? readError(providerId, string(error.message)) : null,
-    spend: providerId === "openrouter" ? readSpend(usage) : null,
+    spend: error ? null : readProviderSpend(providerId, usage),
   };
 }
 
@@ -245,23 +372,31 @@ function isAuthenticationFailure(usage: ProviderUsage): boolean {
 
 type ResolvedAuth = { env: NodeJS.ProcessEnv; directory: string | null; source: string };
 
+async function resolveOmpAuth(
+  providerId: keyof typeof ompProviders,
+  forceRefresh: boolean,
+): Promise<ResolvedAuth | null> {
+  try {
+    const { env, directory } = await createCodexBarEnvironment(providerId, forceRefresh);
+    return { env, directory, source: "oauth" };
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Codex is read from its own CLI session. Claude and Antigravity are read with an OAuth
- * token borrowed from OMP; when OMP is not installed or cannot mint one, fall back to
- * CodexBar's own provider strategies instead of failing the row.
+ * Most providers read their own session or API key. Claude is read with an OAuth token
+ * borrowed from OMP. Antigravity is read from CodexBar's ambient source first, because
+ * an OMP token reports its free tier while the ambient `agy`/Google source reports the
+ * paid Gemini quota; OMP is only a fallback when the ambient source fails.
  */
 async function resolveAuth(
   providerId: ProviderId,
   forceRefresh: boolean,
 ): Promise<ResolvedAuth> {
   const ambient: ResolvedAuth = { env: process.env, directory: null, source: "auto" };
-  if (providerId === "codex" || providerId === "openrouter") return ambient;
-  try {
-    const { env, directory } = await createCodexBarEnvironment(providerId, forceRefresh);
-    return { env, directory, source: "oauth" };
-  } catch {
-    return ambient;
-  }
+  if (providerId !== "claude") return ambient;
+  return (await resolveOmpAuth(providerId, forceRefresh)) ?? ambient;
 }
 
 const codexBarInstallHint =
@@ -294,12 +429,13 @@ async function findCodexBar(): Promise<string | null> {
 async function runCodexBar(
   providerId: ProviderId,
   forceRefresh: boolean,
+  authOverride?: ResolvedAuth,
 ): Promise<ProviderUsage> {
   let temporaryDirectory: string | null = null;
   try {
     const binary = await findCodexBar();
     if (!binary) throw new Error(codexBarInstallHint);
-    const auth = await resolveAuth(providerId, forceRefresh);
+    const auth = authOverride ?? (await resolveAuth(providerId, forceRefresh));
     temporaryDirectory = auth.directory;
     const args = ["usage", "--provider", providerId, "--format", "json", "--source", auth.source];
     const { stdout } = await execFileAsync(
@@ -351,6 +487,23 @@ async function runCodexBar(
 }
 
 async function fetchProvider(providerId: ProviderId): Promise<ProviderUsage> {
+  if (providerId === "antigravity") {
+    const ambient = await runCodexBar(providerId, false, {
+      env: process.env,
+      directory: null,
+      source: "auto",
+    });
+    if (!ambient.error && ambient.windows.length > 0) return ambient;
+
+    const omp = await resolveOmpAuth(providerId, false);
+    if (omp) {
+      const fallback = await runCodexBar(providerId, false, omp);
+      if (!fallback.error) return fallback;
+      if (!ambient.error) return fallback;
+    }
+    return ambient;
+  }
+
   const usage = await runCodexBar(providerId, false);
   if (providerId === "codex" || !isAuthenticationFailure(usage)) return usage;
   return runCodexBar(providerId, true);
@@ -510,6 +663,7 @@ function formatProviderLabel(providerId: string): string {
     "google-antigravity": "Antigravity",
     antigravity: "Antigravity",
     opencode: "OpenCode",
+    opencodego: "OpenCode Go",
     pi: "Pi",
   };
   return map[providerId.toLowerCase()] ?? providerId;

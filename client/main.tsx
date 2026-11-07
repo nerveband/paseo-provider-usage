@@ -28,6 +28,16 @@ function formatCost(usd: number | null): string {
   return `$${usd.toFixed(2)}`;
 }
 
+function sourceLabel(provider: ProviderUsage): string | null {
+  if (!provider.source) return null;
+  if (provider.id === "antigravity" && provider.source === "cli") return "Antigravity CLI";
+  if (provider.id === "claude" && provider.source === "oauth") return "OMP token";
+  if (provider.id === "codex" && provider.source === "oauth") return "Codex login";
+  if (provider.source === "api") return "API key";
+  if (provider.source === "local") return "local session";
+  return provider.source;
+}
+
 function resetLabel(window: ProviderUsage["windows"][number]): string | null {
   if (window.resetsAt) {
     const date = new Date(window.resetsAt);
@@ -262,7 +272,9 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
         ) : (
           quotaSnapshot?.providers.map((provider, idx) => {
             const spend = provider.spend;
-            const meta = [provider.plan, provider.account].filter(Boolean).join(" · ");
+            const meta = [provider.plan, provider.account, sourceLabel(provider)]
+              .filter(Boolean)
+              .join(" · ");
             return (
               <View key={provider.id} style={{ gap: 14 }}>
                 {idx > 0 ? divider : null}
