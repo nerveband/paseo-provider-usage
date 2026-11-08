@@ -1,25 +1,26 @@
 # Paseo plan usage
 
-A [Paseo](https://paseo.sh) plugin that shows your Claude, Codex, Antigravity, OpenRouter, and OpenCode Go usage in the sidebar. One click, no menus, no extra window.
+A [Paseo](https://paseo.sh) plugin that shows your Claude, Codex, Antigravity, OpenRouter, OpenCode Go, and Baseten usage in the sidebar. One click, no menus, no extra window.
 
 ![The Usage screen showing Claude, Codex, Antigravity, OpenRouter, and OpenCode Go usage above agent activity](docs/screenshot.png)
 
 Each row is one usage limit. It shows the name, when it resets, how much you've used, and a bar. Rows turn red at 90% or more. The account line shows the plan, the account, and where the numbers came from when the provider reports them. Credit and balance rows appear under providers that return them.
 
-Paseo already has some of this, but it's hidden in a tooltip and a settings page. This plugin keeps it in one place you can reach from the keyboard, and adds Antigravity and OpenCode Go, which Paseo doesn't show.
+Paseo already has some of this, but it's hidden in a tooltip and a settings page. This plugin keeps it in one place you can reach from the keyboard, and adds Antigravity, OpenCode Go, and Baseten, which Paseo doesn't show.
 
 ## What you see
 
 - **Plans.** Session, weekly, and monthly limits for Claude, Codex, Antigravity, and OpenCode Go, with reset times. Plan names appear when CodexBar reports one.
 - **Credits and balances.** Codex credits, extra-usage balance, and rate-limit reset credits; OpenRouter credit left, used, and added. Providers that do not report a credit field show no invented number.
 - **OpenRouter.** Account-wide spend and 30 days of activity (tokens, requests, and model count). CodexBar does not expose per-model OpenRouter spend, so the plugin cannot show it.
+- **Baseten.** The last 30 days of billing: spend for Model APIs, dedicated inference, training, and Loops; the credits Baseten applied; what is still due; spend by model; and the tokens behind it. Baseten reports no session or weekly limit, so that row has no bar. It also reports no credit balance through its API, so the row says where the balance lives instead of guessing one.
 - **Agent activity.** Tokens, estimated cost, and sessions for the last 24 hours, 7, 14, or 30 days, or all time. Tap a bar in the chart to see that day, or tap a model to show only that model.
 
 Some internal lanes, like `gpt-reserve`, are hidden. They copy a real limit and aren't something you plan around.
 
 ## Where the numbers come from
 
-The plugin uses the [CodexBar](https://github.com/steipete/CodexBar) command-line tool. It reuses logins you already have, so you don't sign in again.
+Most numbers come from the [CodexBar](https://github.com/steipete/CodexBar) command-line tool, which reuses logins you already have. Baseten has no CodexBar provider, so the plugin reads the Baseten billing API with an API key.
 
 | Provider | Source |
 | --- | --- |
@@ -28,6 +29,7 @@ The plugin uses the [CodexBar](https://github.com/steipete/CodexBar) command-lin
 | Antigravity | CodexBar's ambient source first: its Antigravity checks, the `agy` CLI, or Google login. An OMP token is only a fallback when that fails, because an OMP token reports the free tier while the ambient source reports the paid quota. |
 | OpenRouter | The API key saved in CodexBar, or `OPENROUTER_API_KEY`. |
 | OpenCode Go | The local OpenCode Go session that CodexBar reads. Limits are marked as estimated. |
+| Baseten | The Baseten billing API, using `BASETEN_API_KEY` or the key stored by your Pi login. |
 
 No app window opens. You don't need the Antigravity app or an `agy` session running.
 
@@ -37,13 +39,20 @@ No app window opens. You don't need the Antigravity app or an `agy` session runn
 codexbar config set-api-key --provider openrouter --stdin   # paste the key, then press Ctrl-D
 ```
 
-A normal key shows credits and that key's own spending. A Management key also shows 30 days of activity for the whole account. CodexBar reports account-wide spend and a model count, not spending per model, so the plugin can't show a per-model dollar split.
+A normal OpenRouter key shows credits and that key's own spending. A Management key also shows 30 days of activity for the whole account. CodexBar reports account-wide spend and a model count, not spending per model, so the plugin can't show a per-model dollar split.
+
+### Add a Baseten key
+
+Create a key at [app.baseten.co/settings/api-keys](https://app.baseten.co/settings/api-keys), then either sign in to Baseten from Pi on the same machine (the plugin reads that key), or set `BASETEN_API_KEY` for the Paseo daemon. The key needs access to workspace billing; a key from a non-admin account may see lower totals.
+
+The Baseten billing API covers up to 31 days per request, so the row shows the last 30 days. Credits applied and the amount due come from that window. The remaining credit balance is shown only on the Baseten billing dashboard, so the plugin leaves it out rather than estimating it.
 
 ## Requirements
 
 - Paseo 0.15.0 or later.
 - The CodexBar CLI (`codexbar`). Put it on your `PATH` or in `~/.local/bin`, or set `CODEXBAR_BIN` to its full path. Get it from [CodexBar releases](https://github.com/steipete/CodexBar/releases) (macOS and Linux).
 - Optional: OMP signed in to `anthropic` for the Claude row, and to `google-antigravity` as an Antigravity fallback.
+- Optional: a Baseten API key for the Baseten row. Without one, only that row shows a setup message.
 
 ## Install
 
@@ -66,6 +75,7 @@ Then click **Usage** in the sidebar, or press `Cmd+K` (or `Ctrl+K`) and run **Op
 | Variable | What it does |
 | --- | --- |
 | `CODEXBAR_BIN` | Full path to CodexBar. If it's not set, the plugin looks on your `PATH`, then in `~/.local/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`. |
+| `BASETEN_API_KEY` | Baseten API key. If it's not set, the plugin uses the Baseten key saved by your Pi login. |
 
 Providers, refresh timing, and the red threshold are set in the code, in [server/usage.ts](server/usage.ts) and [client/main.tsx](client/main.tsx).
 
@@ -93,6 +103,7 @@ The plugin reads your local agent history files, up to eight at a time. It remem
 
 - The plugin's server code runs next to your Paseo daemon, without a sandbox.
 - Tokens go to CodexBar through a private temporary file that only your user can read. The file is deleted after each fetch.
+- The Baseten key is read from the daemon environment or your Pi login and sent only to `api.baseten.co`. Baseten error messages show the HTTP status, never the response body, so the key cannot reach the screen or the snapshot.
 - Tokens are never logged, printed, or saved in this repository.
 - If one provider fails, only its row shows an error. The others still load.
 - Raw error output from the CLI is replaced with a safe message before it reaches the screen or the saved file.
@@ -117,7 +128,7 @@ Don't restart the Paseo daemon to apply changes. That stops running agents.
 | [index.server.ts](index.server.ts) | Registers the server handlers. |
 | [index.client.tsx](index.client.tsx) | Adds the screen, the sidebar row, and the Command Center action. |
 | [shared/usage.ts](shared/usage.ts) | Data shapes shared by the server and the app. |
-| [server/usage.ts](server/usage.ts) | Tokens, CodexBar calls, caching, and activity totals. |
+| [server/usage.ts](server/usage.ts) | Tokens, CodexBar calls, Baseten billing calls, caching, and activity totals. |
 | [client/main.tsx](client/main.tsx) | The Usage screen. |
 | [tests/](tests/) | Tests for activity loading, CLI errors, and dependency security. |
 | [vendor/](vendor/) | Local security patches for two development dependencies. |
@@ -126,7 +137,7 @@ Check screen changes in the real app, in light and dark mode, at full and narrow
 
 ## Credits
 
-Usage data comes from [CodexBar](https://github.com/steipete/CodexBar) by Peter Steinberger.
+Usage data comes from [CodexBar](https://github.com/steipete/CodexBar) by Peter Steinberger, and from the [Baseten billing API](https://docs.baseten.co/organization/billing) for the Baseten row.
 
 ## License
 

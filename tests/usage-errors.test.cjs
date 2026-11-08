@@ -9,7 +9,7 @@ const ts = require('typescript');
 const serverPath = require.resolve('../server/usage.ts');
 const serverRequire = createRequire(serverPath);
 const source = ts.transpileModule(
-  readFileSync(serverPath, 'utf8') + '\nexports.runCodexBar = runCodexBar;\nexports.normalize = normalize;\n',
+  readFileSync(serverPath, 'utf8') + '\nexports.runCodexBar = runCodexBar;\nexports.normalize = normalize;\nexports.readBasetenSpend = readBasetenSpend;\n',
   { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
 ).outputText;
 
@@ -131,6 +131,58 @@ test('codex exposes its credit balance and reset credits', async () => {
   const resets = usage.spend.groups.find((group) => group.title === 'Rate limit resets');
   assert.equal(resets.rows[0].value, '2');
   assert.equal(resets.rows[1].value, 'Nov 30, 2026');
+});
+
+function loadBasetenSpend(summary) {
+  const exports = {};
+  vm.runInNewContext(source, {
+    exports,
+    require: (id) => (id === 'node:child_process' ? { execFile: () => {} } : id === '../shared/usage' ? {} : serverRequire(id)),
+    process: { env: {} },
+  }, { filename: serverPath });
+  return exports.readBasetenSpend(summary);
+}
+
+test('baseten reports spend, credits applied, and what is still due', () => {
+  const spend = loadBasetenSpend({
+    model_apis_usage: {
+      subtotal: '2.29',
+      credits_used: '2.24',
+      total: '0.05',
+      breakdown: [
+        {
+          model_name: 'DeepSeek V4.1 Flash',
+          subtotal: '2.29',
+          input_tokens: 1000,
+          output_tokens: 20,
+          cached_input_tokens: 800,
+        },
+      ],
+    },
+    dedicated_usage: { subtotal: '0.00', credits_used: '0.00', total: '0.00', breakdown: [] },
+  });
+
+  const window = spend.groups.find((group) => group.title === 'Last 30 days');
+  assert.deepEqual(JSON.parse(JSON.stringify(window.rows)), [
+    { label: 'Model APIs', value: '$2.29' },
+    { label: 'Credits applied', value: '$2.24' },
+    { label: 'Due after credits', value: '$0.05' },
+  ]);
+  const models = spend.groups.find((group) => group.title === 'Model APIs by model');
+  assert.deepEqual(JSON.parse(JSON.stringify(models.rows)), [
+    { label: 'DeepSeek V4.1 Flash', value: '$2.29' },
+  ]);
+  assert.match(spend.note, /remaining credit balance/i);
+});
+
+test('baseten never invents a balance or a spend figure', () => {
+  const spend = loadBasetenSpend({
+    model_apis_usage: { subtotal: '0.00', credits_used: '0.00', total: '0.00', breakdown: [] },
+    training_usage: { subtotal: null, credits_used: null, total: null },
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(spend.groups)), []);
+  assert.match(spend.note, /no usage in the last 30 days/i);
 });
 
 test('opencode go uses provider window labels and marks estimated limits', async () => {

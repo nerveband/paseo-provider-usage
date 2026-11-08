@@ -25,7 +25,7 @@ export const spendSchema = z.object({
 });
 
 export const providerUsageSchema = z.object({
-  id: z.enum(["claude", "codex", "antigravity", "openrouter", "opencodego"]),
+  id: z.enum(["claude", "codex", "antigravity", "openrouter", "opencodego", "baseten"]),
   name: z.string(),
   source: z.string().nullable(),
   account: z.string().nullable(),

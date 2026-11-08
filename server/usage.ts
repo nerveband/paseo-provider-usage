@@ -14,7 +14,7 @@ import {
 } from "../shared/usage";
 
 const execFileAsync = promisify(execFile);
-const providerIds = ["claude", "codex", "antigravity", "openrouter", "opencodego"] as const;
+const providerIds = ["claude", "codex", "antigravity", "openrouter", "opencodego", "baseten"] as const;
 type ProviderId = (typeof providerIds)[number];
 
 type JsonObject = Record<string, unknown>;
@@ -25,6 +25,7 @@ const names: Record<ProviderId, string> = {
   antigravity: "Antigravity",
   openrouter: "OpenRouter",
   opencodego: "OpenCode Go",
+  baseten: "Baseten",
 };
 
 function object(value: unknown): JsonObject | null {
@@ -199,6 +200,210 @@ function readProviderSpend(providerId: ProviderId, usage: JsonObject | null): Pr
 
   if (groups.length === 0 && notes.length === 0) return null;
   return { groups, note: notes.length > 0 ? notes.join(" ") : null };
+}
+
+/* ========================================================================== */
+/* Baseten                                                                    */
+/* ========================================================================== */
+
+const basetenApiBase = "https://api.baseten.co";
+const basetenWindowDays = 30;
+
+const basetenSetupHint =
+  "Baseten needs an API key: set BASETEN_API_KEY for the Paseo daemon, or sign in to Baseten in " +
+  "Pi on this machine. Create a key at https://app.baseten.co/settings/api-keys.";
+
+const basetenKeyHint =
+  "Baseten rejected the saved API key. Create a new one at https://app.baseten.co/settings/api-keys " +
+  "and update the key the plugin reads.";
+
+/**
+ * Reuses a Baseten key that already exists on this machine: the daemon environment first,
+ * then the login Pi stores for its own Baseten provider. No new credential store is added.
+ */
+async function readBasetenKey(): Promise<string | null> {
+  const fromEnvironment = string(process.env.BASETEN_API_KEY)?.trim();
+  if (fromEnvironment) return fromEnvironment;
+  try {
+    const raw = await readFile(join(homedir(), ".pi", "agent", "auth.json"), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    return string(object(object(parsed)?.baseten)?.key)?.trim() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+class BasetenHttpError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`Baseten responded with HTTP ${status}`);
+    this.status = status;
+  }
+}
+
+/** Response bodies are never surfaced, so a failed call cannot echo the key. */
+async function fetchBasetenJson(path: string, key: string): Promise<unknown> {
+  const response = await fetch(`${basetenApiBase}${path}`, {
+    headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new BasetenHttpError(response.status);
+  return response.json();
+}
+
+/** Baseten reports money as decimal strings. A missing value stays missing. */
+function money(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(2)}`;
+}
+
+const basetenCategories = [
+  { key: "model_apis_usage", label: "Model APIs" },
+  { key: "dedicated_usage", label: "Dedicated inference" },
+  { key: "training_usage", label: "Training" },
+  { key: "loops_usage", label: "Loops" },
+] as const;
+
+type SpendGroup = NonNullable<ProviderUsage["spend"]>["groups"][number];
+type SpendRow = SpendGroup["rows"][number];
+
+/**
+ * Per category, Baseten reports the charge before credits (`subtotal`), the amount the
+ * credits covered (`credits_used`), and what is left due (`total`). A fully credit-covered
+ * month reads 2.24 / 2.24 / 0.00. The API reports no credit balance, so none is shown.
+ */
+function readBasetenSpend(summary: JsonObject | null): ProviderUsage["spend"] {
+  if (!summary) return null;
+  const groups: SpendGroup[] = [];
+  const notes: string[] = [];
+  const categoryRows: SpendRow[] = [];
+  const models: { label: string; amount: number }[] = [];
+  let grossTotal = 0;
+  let creditTotal = 0;
+  let netTotal = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cachedTokens = 0;
+
+  for (const category of basetenCategories) {
+    const usage = object(summary[category.key]);
+    if (!usage) continue;
+    const gross = money(usage.subtotal);
+    const credits = money(usage.credits_used);
+    const net = money(usage.total);
+    if (gross === null && credits === null && net === null) continue;
+    grossTotal += gross ?? 0;
+    creditTotal += credits ?? 0;
+    netTotal += net ?? 0;
+    if ((gross ?? 0) > 0) categoryRows.push({ label: category.label, value: formatUsd(gross ?? 0) });
+
+    for (const item of Array.isArray(usage.breakdown) ? usage.breakdown : []) {
+      const entry = object(item);
+      const name = string(entry?.model_name);
+      const amount = money(entry?.subtotal);
+      if (name && amount !== null && amount > 0) models.push({ label: name, amount });
+      inputTokens += number(entry?.input_tokens) ?? 0;
+      outputTokens += number(entry?.output_tokens) ?? 0;
+      cachedTokens += number(entry?.cached_input_tokens) ?? 0;
+    }
+  }
+
+  if (grossTotal > 0 || creditTotal > 0 || netTotal > 0) {
+    const rows: SpendRow[] = [...categoryRows];
+    if (categoryRows.length > 1) rows.push({ label: "Before credits", value: formatUsd(grossTotal) });
+    if (creditTotal > 0) rows.push({ label: "Credits applied", value: formatUsd(creditTotal) });
+    if (grossTotal > 0) rows.push({ label: "Due after credits", value: formatUsd(netTotal) });
+    if (rows.length > 0) groups.push({ title: `Last ${basetenWindowDays} days`, rows });
+  }
+
+  if (models.length > 0) {
+    models.sort((a, b) => b.amount - a.amount);
+    const rows: SpendRow[] = models.slice(0, 4).map((model) => ({
+      label: model.label,
+      value: formatUsd(model.amount),
+    }));
+    const remaining = models.slice(4).reduce((sum, model) => sum + model.amount, 0);
+    if (remaining > 0) rows.push({ label: "Other models", value: formatUsd(remaining) });
+    groups.push({ title: "Model APIs by model", rows });
+  }
+
+  if (inputTokens > 0 || outputTokens > 0 || cachedTokens > 0) {
+    const rows: SpendRow[] = [];
+    if (inputTokens > 0) rows.push({ label: "Input", value: compactNumber.format(inputTokens) });
+    if (cachedTokens > 0) rows.push({ label: "Cached input", value: compactNumber.format(cachedTokens) });
+    if (outputTokens > 0) rows.push({ label: "Output", value: compactNumber.format(outputTokens) });
+    groups.push({ title: `Tokens, last ${basetenWindowDays} days`, rows });
+  }
+
+  if (groups.length === 0) {
+    notes.push(`Baseten reported no usage in the last ${basetenWindowDays} days.`);
+  }
+  notes.push(
+    "Spend and credits applied come from the Baseten billing API; the remaining credit balance " +
+      "is shown only on the Baseten billing dashboard.",
+  );
+  return { groups, note: notes.join(" ") };
+}
+
+/** Baseten is the one provider read straight from its own API instead of CodexBar. */
+async function fetchBaseten(): Promise<ProviderUsage> {
+  const empty: ProviderUsage = {
+    id: "baseten",
+    name: names.baseten,
+    source: null,
+    account: null,
+    plan: null,
+    updatedAt: null,
+    // Baseten meters spend and credits; it reports no session or weekly quota window.
+    windows: [],
+    error: null,
+    spend: null,
+  };
+
+  const key = await readBasetenKey();
+  if (!key) return { ...empty, error: basetenSetupHint };
+
+  const now = new Date();
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  const start = new Date(end.getTime() - basetenWindowDays * 86_400_000);
+  const query = `start_date=${start.toISOString()}&end_date=${end.toISOString()}`;
+
+  try {
+    const [summary, user] = await Promise.all([
+      fetchBasetenJson(`/v1/billing/usage_summary?${query}`, key),
+      fetchBasetenJson("/v1/users/me", key).catch(() => null),
+    ]);
+    return {
+      ...empty,
+      source: "api",
+      account: string(object(user)?.email),
+      updatedAt: new Date().toISOString(),
+      spend: readBasetenSpend(object(summary)),
+    };
+  } catch (cause) {
+    const status = cause instanceof BasetenHttpError ? cause.status : null;
+    const timedOut = (cause as Error | undefined)?.name === "TimeoutError";
+    return {
+      ...empty,
+      source: "api",
+      error:
+        status === 401 || status === 403
+          ? basetenKeyHint
+          : status !== null
+            ? `Baseten usage could not be loaded (HTTP ${status}).`
+            : timedOut
+              ? "Baseten usage request timed out. Try refreshing later."
+              : "Baseten usage could not be loaded. Check the key and try again.",
+    };
+  }
 }
 
 function normalize(providerId: ProviderId, payload: unknown): ProviderUsage {
@@ -487,6 +692,8 @@ async function runCodexBar(
 }
 
 async function fetchProvider(providerId: ProviderId): Promise<ProviderUsage> {
+  if (providerId === "baseten") return fetchBaseten();
+
   if (providerId === "antigravity") {
     const ambient = await runCodexBar(providerId, false, {
       env: process.env,
