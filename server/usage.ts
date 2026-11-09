@@ -242,10 +242,10 @@ class BasetenHttpError extends Error {
 }
 
 /** Response bodies are never surfaced, so a failed call cannot echo the key. */
-async function fetchBasetenJson(path: string, key: string): Promise<unknown> {
+async function fetchBasetenJson(path: string, key: string, timeoutMs = 20_000): Promise<unknown> {
   const response = await fetch(`${basetenApiBase}${path}`, {
     headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new BasetenHttpError(response.status);
   return response.json();
@@ -378,7 +378,8 @@ async function fetchBaseten(): Promise<ProviderUsage> {
 
   try {
     const [summary, user] = await Promise.all([
-      fetchBasetenJson(`/v1/billing/usage_summary?${query}`, key),
+      // The billing summary routinely takes 8 to 12 s and longer under load; 20 s timed out.
+      fetchBasetenJson(`/v1/billing/usage_summary?${query}`, key, 60_000),
       fetchBasetenJson("/v1/users/me", key).catch(() => null),
     ]);
     return {
