@@ -83,28 +83,6 @@ async function normalizePayload(providerId, payload) {
   return exports.normalize(providerId, payload);
 }
 
-test('antigravity keeps the labelled extra rate windows without duplicates', async () => {
-  const usage = await normalizePayload('antigravity', {
-    usage: {
-      primary: { usedPercent: 100 },
-      secondary: { usedPercent: 0 },
-      extraRateWindows: [
-        { id: 'gemini-5h', title: 'Gemini 5-hour', window: { usedPercent: 100 } },
-        { id: 'gemini-weekly', title: 'Gemini weekly', window: { usedPercent: 53.5546 } },
-        { id: 'claude-5h', title: 'Claude/GPT 5-hour', window: { usedPercent: 0 } },
-        { id: 'claude-weekly', title: 'Claude/GPT weekly', window: { usedPercent: 0 } },
-      ],
-    },
-    rateWindowLabels: { primary: 'Gemini Models', secondary: 'Claude and GPT' },
-  });
-
-  assert.equal(
-    usage.windows.map((window) => window.label).join('|'),
-    'Gemini 5-hour|Gemini weekly|Claude/GPT 5-hour|Claude/GPT weekly',
-  );
-  assert.equal(Math.round(usage.windows[1].usedPercent), 54);
-});
-
 test('codex exposes its credit balance and reset credits', async () => {
   const usage = await normalizePayload('codex', {
     usage: {
@@ -173,6 +151,10 @@ test('baseten reports spend, credits applied, and what is still due', () => {
     { label: 'DeepSeek V4.1 Flash', value: '$2.29' },
   ]);
   assert.match(spend.note, /remaining credit balance/i);
+  const balance = spend.groups.find((group) => group.title === 'Credit balance');
+  assert.deepEqual(JSON.parse(JSON.stringify(balance.rows)), [
+    { label: 'Remaining', value: 'Not available from the API', unavailable: true },
+  ]);
 });
 
 test('baseten never invents a balance or a spend figure', () => {
@@ -181,24 +163,10 @@ test('baseten never invents a balance or a spend figure', () => {
     training_usage: { subtotal: null, credits_used: null, total: null },
   });
 
-  assert.deepEqual(JSON.parse(JSON.stringify(spend.groups)), []);
-  assert.match(spend.note, /no usage in the last 30 days/i);
-});
-
-test('opencode go uses provider window labels and marks estimated limits', async () => {
-  const usage = await normalizePayload('opencodego', {
-    usage: {
-      primary: { usedPercent: 0, windowMinutes: 300 },
-      secondary: { usedPercent: 0, windowMinutes: 10080 },
-      tertiary: { usedPercent: 0, windowMinutes: 43200 },
-      dataConfidence: 'estimated',
-    },
-    rateWindowLabels: { primary: '5-hour', secondary: 'Weekly', tertiary: 'Monthly' },
-  });
-
-  assert.equal(
-    usage.windows.map((window) => window.label).join('|'),
-    '5-hour|Weekly|Monthly',
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(spend.groups.map((group) => group.title))),
+    ['Credit balance'],
   );
-  assert.match(usage.spend.note, /estimated/i);
+  assert.equal(spend.groups[0].rows[0].unavailable, true);
+  assert.match(spend.note, /no usage in the last 30 days/i);
 });

@@ -173,6 +173,7 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
       meta: { color: muted, fontSize: 12, flexShrink: 1, textAlign: "right" as const },
       label: { color: fg, fontSize: 13, flexShrink: 1 },
       subtle: { color: muted, fontSize: 12 },
+      unavailable: { color: muted, fontSize: 13, fontStyle: "italic" as const, flexShrink: 1, textAlign: "right" as const },
       value: { color: fg, fontSize: 13, fontWeight: "500" as const, fontVariant: ["tabular-nums" as const] },
       valueCritical: {
         color: theme.colors.statusDanger,
@@ -294,19 +295,23 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
                     const reset = resetLabel(window);
                     const used = Math.round(window.usedPercent);
                     const critical = used >= CRITICAL_USED_PERCENT;
+                    const estimated = window.estimated === true;
                     return (
                       <View
                         key={window.id}
                         style={{ gap: 6 }}
                         accessible
-                        accessibilityLabel={`${window.label}, ${used}% used${reset ? `, ${reset}` : ""}`}
+                        accessibilityLabel={`${window.label}, ${used}% used${estimated ? ", estimated" : ""}${reset ? `, ${reset}` : ""}`}
                       >
                         <View style={styles.rowBetween}>
                           <Text style={styles.label} numberOfLines={1}>
                             {window.label}
                             {reset ? <Text style={styles.subtle}>{`  ${reset}`}</Text> : null}
                           </Text>
-                          <Text style={critical ? styles.valueCritical : styles.value}>{used}%</Text>
+                          <Text style={critical ? styles.valueCritical : styles.value}>
+                            {used}%
+                            {estimated ? <Text style={styles.subtle}>{" est."}</Text> : null}
+                          </Text>
                         </View>
                         <ShareBar
                           percent={window.usedPercent}
@@ -325,12 +330,13 @@ export function MainSurface({ theme, layout }: PluginSurfaceProps) {
                           key={row.label}
                           style={styles.rowBetween}
                           accessible
-                          accessibilityLabel={`${row.label}: ${row.value}`}
+                          accessibilityLabel={`${row.label}: ${row.unavailable ? "not available from the API" : row.value}`}
                         >
                           <Text style={styles.label}>{row.label}</Text>
-                          <Text style={styles.value}>{row.value}</Text>
+                          <Text style={row.unavailable ? styles.unavailable : styles.value}>{row.value}</Text>
                         </View>
                       ))}
+                      {group.note ? <Text style={styles.footnote}>{group.note}</Text> : null}
                     </View>
                   ))}
                   {spend?.note ? <Text style={styles.footnote}>{spend.note}</Text> : null}

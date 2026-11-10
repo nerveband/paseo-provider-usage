@@ -10,14 +10,28 @@ export const usageWindowSchema = z.object({
   resetDescription: z.string().nullable(),
   /** Window length in minutes, used to label the window when no reset time exists. */
   windowMinutes: z.number().nullable(),
+  /** True when the percentage is a local estimate rather than a value the provider reported. */
+  estimated: z.boolean().optional(),
+});
+
+/**
+ * One label/value row. `unavailable` marks a field the provider's API does not expose, so the
+ * surface can say so instead of leaving a gap or inventing a number.
+ */
+export const spendRowSchema = z.object({
+  label: z.string(),
+  value: z.string(),
+  unavailable: z.boolean().optional(),
 });
 
 export const spendSchema = z.object({
-  /** Provider-reported groups such as Credits or Activity, as label/value rows. */
+  /** Provider-reported groups such as Plan, Credits, or Spend, as label/value rows. */
   groups: z.array(
     z.object({
       title: z.string(),
-      rows: z.array(z.object({ label: z.string(), value: z.string() })),
+      rows: z.array(spendRowSchema),
+      /** Evidence or guidance that applies to this group only. */
+      note: z.string().nullable().optional(),
     }),
   ),
   /** Setup guidance when part of the spend data is unavailable. */
