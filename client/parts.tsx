@@ -299,19 +299,77 @@ export function Chip({ text, theme, color }: { text: string; theme: PluginTheme;
 }
 
 /**
- * The caution color for a limit getting close: the theme's own warning color, used for the tint,
- * the dot, and the bar fill, so a caution reads as amber on a light theme and yellow on a dark
- * one without inventing a hue.
+ * The caution color for a limit getting close, derived from the theme's warning color. The
+ * warning token is a brownish amber, close in hue to the danger red, so a caution reads as a
+ * muddy blend of the two. This pushes it toward gold (hue up 22 degrees, more saturated) and
+ * keeps the lightness, which is what keeps the label readable: the foreground text sits on a
+ * pale tint of this color in both themes, and the bar is a flat fill. Measured on the surface,
+ * the shift keeps the label's contrast above 9 to 1 in both themes and moves the bar's contrast
+ * against the danger red from about 1.0 to 1.7, which is what separates the two levels.
  */
 export function limitWarning(theme: PluginTheme): string {
-  return theme.colors.statusWarning;
+  return shiftHue(theme.colors.statusWarning, 22, 0.12, -0.02);
+}
+/** "#rrggbb", "#rgb", or "rgb(r, g, b)" to 0-255 channels, or null. */
+function parseColor(value: string): [number, number, number] | null {
+  const hex = value.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const digits = hex[1].length === 3 ? hex[1].split("").map((c) => c + c).join("") : hex[1];
+    const n = Number.parseInt(digits, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  const nums = value.trim().match(/^rgba?\(([^)]+)\)$/i)?.[1].split(",").map(Number);
+  return nums && nums.length >= 3 && nums.every(Number.isFinite) ? [nums[0], nums[1], nums[2]] : null;
+}
+
+/**
+ * Moves a color's hue toward yellow, up or down in saturation, and up or down in lightness,
+ * and returns it as an rgb() value. Lightness is clamped, so a color near white or black stays
+ * readable. This is the only place the screen derives a color of its own from a theme token.
+ */
+function shiftHue(
+  value: string,
+  hueDegrees: number,
+  saturationDelta: number,
+  lightnessDelta: number,
+): string {
+  const rgb = parseColor(value);
+  if (!rgb) return value;
+  const [r, g, b] = rgb.map((n) => n / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h /= 6;
+  }
+  h = (h + hueDegrees / 360 + 1) % 1;
+  s = Math.min(1, Math.max(0, s + saturationDelta));
+  const lightness = Math.min(1, Math.max(0, l + lightnessDelta));
+  const hue2rgb = (p: number, q: number, t: number): number => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = lightness < 0.5 ? lightness * (1 + s) : lightness + s - lightness * s;
+  const p = 2 * lightness - q;
+  const out = [hue2rgb(p, q, h + 1 / 3), hue2rgb(p, q, h), hue2rgb(p, q, h - 1 / 3)];
+  return `rgb(${out.map((n) => Math.round(n * 255)).join(", ")})`;
 }
 
 /**
  * The flag a limit gets. There are two levels and they are deliberately different in weight.
  * "Limit reached" is a filled pill in `statusDanger`, the heaviest thing on the screen, with
- * bold text. "Near limit" is a lighter tint in `statusWarning` with plain-weight text. The word
- * always says which level it is, so color is never the only signal, and the bar and the figure
+ * bold text. "Near limit" is a lighter tint in a golden yellow derived from the warning token.
+ * with plain-weight text. The word always says which level it is, so color is never the only
+ * signal, and the bar and the figure use the same two colors at the same weight.
  * use the same two colors at the same weight.
  */
 export function LimitChip({
@@ -345,7 +403,7 @@ export function LimitChip({
         style={{
           color: reached ? theme.colors.accentForeground : theme.colors.foreground,
           ...type.caption,
-          fontWeight: "700",
+          fontWeight: reached ? "700" : "600",
         }}
       >
         {text}
