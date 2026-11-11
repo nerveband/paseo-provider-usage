@@ -167,9 +167,18 @@ export function tightestWindow(provider: ProviderUsage): UsageWindow | null {
   return provider.windows.reduce((top, window) => (window.usedPercent > top.usedPercent ? window : top));
 }
 
+
+/** How close a limit is to its end. `ok` is under the threshold, `near` is at it, `reached` is at or over 100. */
+export type LimitLevel = "ok" | "near" | "reached";
+
+export function limitLevel(used: number): LimitLevel {
+  return used >= 100 ? "reached" : used >= CRITICAL_USED_PERCENT ? "near" : "ok";
+}
+
 /** The header flag for a used share: color is never the only signal. */
 export function limitFlag(used: number): string | null {
-  return used >= 100 ? "Limit reached" : used >= CRITICAL_USED_PERCENT ? "Near limit" : null;
+  const level = limitLevel(used);
+  return level === "reached" ? "Limit reached" : level === "near" ? "Near limit" : null;
 }
 
 /** The first figure of the first balance group that has one, named by its group. */

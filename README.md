@@ -29,7 +29,7 @@ Each provider has one card.
 - The header shows the name, the plan tag, the account, and where the numbers came from.
 - The header also shows one headline figure: the most-used limit, the credit left, or the 30-day spend.
 - Each limit row shows its name, when it resets, how much you used, and a bar.
-- A row turns red at 90% or more. The card then says **Near limit** or **Limit reached**.
+- Two levels, and they look different. At 90% or more the bar and the tag turn yellow and the card says **Near limit**. At 100% the tag becomes a filled red pill, the figure turns heavy red, and the card says **Limit reached**.
 - Plan facts, balances, and spend sit under the same three headings on every card.
 - If an API has no field for something, the card says **Not available from the API**. It never shows a made-up number.
 - A number the plugin had to estimate has an **Estimate** tag.

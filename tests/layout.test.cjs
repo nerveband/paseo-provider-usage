@@ -270,7 +270,7 @@ test('near limit uses the shared threshold on the provider\u2019s own percentage
   assert.equal(at(threshold - 1), false);
   assert.equal(at(threshold), true);
   assert.equal(at(100), true);
-  // Displayed as 89%, so not near the limit; displayed as 90%, so it is (the card turns red at the same value).
+  // Displayed as 89%, so not near the limit; displayed as 90%, so it is (the bar turns amber at the same value).
   assert.equal(at(89.4), false);
   assert.equal(at(89.5), true);
   assert.equal(layout.isNearLimit(openrouter), false, 'no windows, no limit');
@@ -305,8 +305,14 @@ test('the list row figures come from the provider\u2019s own windows and balance
   assert.equal(layout.tightestWindow(claude).label, 'Weekly');
   assert.equal(layout.tightestWindow(openrouter), null);
   assert.equal(layout.limitFlag(100), 'Limit reached');
+  assert.equal(layout.limitFlag(99.9), 'Near limit');
   assert.equal(layout.limitFlag(90), 'Near limit');
   assert.equal(layout.limitFlag(89), null);
+  assert.equal(layout.limitLevel(100), 'reached', 'the limit is used up');
+  assert.equal(layout.limitLevel(101), 'reached');
+  assert.equal(layout.limitLevel(99), 'near', 'close but not used up');
+  assert.equal(layout.limitLevel(90), 'near');
+  assert.equal(layout.limitLevel(89), 'ok');
   assert.equal(layout.displayPercent(usageWindow('x', 101)), 100);
   assert.equal(layout.displayPercent(usageWindow('x', -3)), 0);
 });

@@ -58,10 +58,10 @@ under "For AI agents".
   from `theme.colors` and all density from `layout.compact`. Never hardcode a hex color or rely
   on React Native's default text color.
 - Available tokens are `surface0`, `foreground`, `foregroundMuted`, `accent`, `accentForeground`,
-  and `statusDanger`. Derive tints with an opacity layer rather than inventing a color.
+  `statusWarning`, and `statusDanger`. Derive tints with an opacity layer rather than inventing a color.
 - Keep every control keyboard reachable with an accessible name, and keep each quota row
   readable by assistive technology as label, percentage, and reset time.
-- Color must never be the only signal. A critical row is red *and* near-full.
+- Color must never be the only signal. A near-limit row is yellow *and* near-full; a reached row is a filled red tag *and* full.
 
 ## Scope
 

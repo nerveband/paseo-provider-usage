@@ -2,9 +2,9 @@ import type { PluginTheme } from "@getpaseo/plugin";
 import { Icon } from "@getpaseo/plugin/client/ui";
 import React from "react";
 import { Pressable, Text, View } from "react-native";
-import { CRITICAL_USED_PERCENT, displayPercent, keyBalance, tightestWindow } from "../shared/layout";
+import { displayPercent, keyBalance, limitLevel, tightestWindow } from "../shared/layout";
 import type { ProviderUsage } from "../shared/usage";
-import { Chip, ShareBar, TIGHT_FONT_SCALE, Tint, space, type Styles } from "./parts";
+import { Chip, LimitChip, ShareBar, TIGHT_FONT_SCALE, Tint, limitWarning, space, type Styles } from "./parts";
 import { headlineFor } from "./provider-card";
 
 /**
@@ -35,14 +35,14 @@ export function ListRow({
   const headline = headlineFor(provider);
   const tightest = tightestWindow(provider);
   const used = tightest ? displayPercent(tightest) : null;
-  const critical = used !== null && used >= CRITICAL_USED_PERCENT;
+  const level: "ok" | "near" | "reached" = used === null ? "ok" : limitLevel(used);
   const key = keyBalance(provider);
   // A provider without limits already leads with its balance; do not repeat it.
   const balance = key && !(tightest === null && headline?.value === key.value) ? key : null;
 
   const tags = [
     provider.plan ? <Chip key="plan" text={provider.plan} theme={theme} /> : null,
-    headline?.flag ? <Chip key="flag" text={headline.flag} theme={theme} color={theme.colors.statusDanger} /> : null,
+    headline?.flag ? <LimitChip key="flag" text={headline.flag} level={headline.level === "reached" ? "reached" : "near"} theme={theme} /> : null,
     headline?.estimated ? <Chip key="estimate" text="Estimate" theme={theme} color={theme.colors.accent} /> : null,
     provider.error ? <Chip key="error" text="Couldn't load usage" theme={theme} color={theme.colors.statusDanger} /> : null,
   ];
@@ -67,7 +67,7 @@ export function ListRow({
     tightest && used !== null ? (
       <ShareBar
         percent={tightest.usedPercent}
-        color={critical ? theme.colors.statusDanger : theme.colors.accent}
+        color={level === "reached" ? theme.colors.statusDanger : level === "near" ? limitWarning(theme) : theme.colors.accent}
         theme={theme}
       />
     ) : null;

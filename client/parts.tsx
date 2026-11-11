@@ -26,8 +26,9 @@ const tabular = ["tabular-nums" as const];
 
 /**
  * Every color comes from the theme; spacing comes from the host's compact flag. Text uses
- * only `foreground` and `foregroundMuted`, so it reads on light and dark themes alike; `accent`
- * and `statusDanger` are used for fills, tints, and icons.
+ * only `foreground` and `foregroundMuted`, so it reads on light and dark themes alike. The
+ * meaning colors (`accent`, `statusWarning`, `statusDanger`) fill bars and dots and tint tags;
+ * the two limit levels use `statusWarning` and `statusDanger`, never the same one.
  */
 export function makeStyles(theme: PluginTheme, compact: boolean) {
   const muted = theme.colors.foregroundMuted;
@@ -290,6 +291,62 @@ export function Chip({ text, theme, color }: { text: string; theme: PluginTheme;
       <Text
         maxFontSizeMultiplier={TIGHT_FONT_SCALE}
         style={{ color: theme.colors.foreground, ...type.caption, fontWeight: "600" }}
+      >
+        {text}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * The caution color for a limit getting close: the theme's own warning color, used for the tint,
+ * the dot, and the bar fill, so a caution reads as amber on a light theme and yellow on a dark
+ * one without inventing a hue.
+ */
+export function limitWarning(theme: PluginTheme): string {
+  return theme.colors.statusWarning;
+}
+
+/**
+ * The flag a limit gets. There are two levels and they are deliberately different in weight.
+ * "Limit reached" is a filled pill in `statusDanger`, the heaviest thing on the screen, with
+ * bold text. "Near limit" is a lighter tint in `statusWarning` with plain-weight text. The word
+ * always says which level it is, so color is never the only signal, and the bar and the figure
+ * use the same two colors at the same weight.
+ */
+export function LimitChip({
+  text,
+  level,
+  theme,
+}: {
+  text: string;
+  level: "near" | "reached";
+  theme: PluginTheme;
+}) {
+  const reached = level === "reached";
+  const color = reached ? theme.colors.statusDanger : limitWarning(theme);
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 5,
+        borderRadius: 999,
+        overflow: "hidden",
+        paddingHorizontal: space.sm,
+        minHeight: 20,
+        backgroundColor: reached ? theme.colors.statusDanger : undefined,
+      }}
+    >
+      {reached ? null : <Tint color={color} opacity={0.16} />}
+      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: reached ? theme.colors.accentForeground : color }} />
+      <Text
+        maxFontSizeMultiplier={TIGHT_FONT_SCALE}
+        style={{
+          color: reached ? theme.colors.accentForeground : theme.colors.foreground,
+          ...type.caption,
+          fontWeight: "700",
+        }}
       >
         {text}
       </Text>

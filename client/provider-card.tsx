@@ -1,15 +1,17 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { Icon } from "@getpaseo/plugin/client/ui";
+import type { LimitLevel } from "../shared/layout";
 import React from "react";
 import { Platform, Pressable, Text, View, type ViewStyle } from "react-native";
-import { displayPercent, limitFlag, sourceLabel, tightestWindow } from "../shared/layout";
+import { displayPercent, limitFlag, limitLevel, sourceLabel, tightestWindow } from "../shared/layout";
 import type { ProviderUsage, SpendGroupKind } from "../shared/usage";
 import {
-  CRITICAL_USED_PERCENT,
   Card,
+  LimitChip,
   Chip,
   Divider,
   Reveal,
+  limitWarning,
   ShareBar,
   TIGHT_FONT_SCALE,
   Tint,
@@ -58,6 +60,8 @@ export type Headline = {
   value: string;
   unit: string | null;
   caption: string;
+  /** The limit level behind `flag`, which colors the tag: amber near, filled red when reached. */
+  level: LimitLevel;
   flag: string | null;
   estimated: boolean;
   accessibilityLabel: string;
@@ -68,17 +72,18 @@ export function headlineFor(provider: ProviderUsage): Headline | null {
   const tightest = tightestWindow(provider);
   if (tightest) {
     const used = displayPercent(tightest);
+    const level = limitLevel(used);
     const reset = resetLabel(tightest);
     const flag = limitFlag(used);
-    const estimated = tightest.estimated === true;
     return {
       value: `${used}%`,
       unit: "used",
       caption: [tightest.label, reset].filter(Boolean).join(" · "),
+      level,
       flag,
-      estimated,
+      estimated: tightest.estimated === true,
       accessibilityLabel: [
-        `Tightest limit: ${tightest.label}, ${used}% used${estimated ? ", estimated" : ""}`,
+        `Tightest limit: ${tightest.label}, ${used}% used${tightest.estimated === true ? ", estimated" : ""}`,
         flag,
         reset,
       ]
@@ -92,6 +97,7 @@ export function headlineFor(provider: ProviderUsage): Headline | null {
     value: headline.value,
     unit: null,
     caption: headline.label,
+    level: "ok",
     flag: null,
     estimated: false,
     accessibilityLabel: `${headline.label}: ${headline.value}`,
@@ -120,7 +126,7 @@ function HeadlineBlock({
     </Text>
   );
   const tags = [
-    headline.flag ? <Chip key="flag" text={headline.flag} theme={theme} color={theme.colors.statusDanger} /> : null,
+    headline.flag ? <LimitChip key="flag" text={headline.flag} level={headline.level === "reached" ? "reached" : "near"} theme={theme} /> : null,
     headline.estimated ? <Chip key="estimate" text="Estimate" theme={theme} color={theme.colors.accent} /> : null,
   ];
   return (
@@ -159,7 +165,8 @@ function WindowRow({
   styles: Styles;
 }) {
   const used = displayPercent(window);
-  const critical = used >= CRITICAL_USED_PERCENT;
+  const level = limitLevel(used);
+  const color = level === "reached" ? theme.colors.statusDanger : level === "near" ? limitWarning(theme) : theme.colors.accent;
   const estimated = window.estimated === true;
   const reset = resetLabel(window);
   return (
@@ -168,7 +175,7 @@ function WindowRow({
       accessible
       accessibilityLabel={[
         window.label,
-        `${used}% used${estimated ? ", estimated" : ""}${critical ? ", near the limit" : ""}`,
+        `${used}% used${estimated ? ", estimated" : ""}${level === "near" ? ", near the limit" : level === "reached" ? ", limit reached" : ""}`,
         reset,
         window.amount,
       ]
@@ -184,13 +191,15 @@ function WindowRow({
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 20 }}>
           {estimated && tagEstimate ? <Chip text="Estimate" theme={theme} color={theme.colors.accent} /> : null}
           {window.amount ? <Text style={styles.subtleNumber}>{window.amount}</Text> : null}
-          {critical ? <Icon name="CircleAlert" size={14} color={theme.colors.statusDanger} /> : null}
-          <Text style={[styles.percent, critical ? { fontWeight: "700" } : null]}>{used}%</Text>
+          {level !== "ok" ? <Icon name="CircleAlert" size={14} color={color} /> : null}
+          <Text style={[styles.percent, level === "reached" ? { fontWeight: "800" } : level === "near" ? { fontWeight: "700" } : null]}>
+            {used}%
+          </Text>
         </View>
       </View>
       <ShareBar
         percent={window.usedPercent}
-        color={critical ? theme.colors.statusDanger : theme.colors.accent}
+        color={color}
         theme={theme}
         height={6}
       />
