@@ -1,8 +1,10 @@
 # Agent policy
 
-This repository is a single trusted Paseo plugin that reports Claude, Codex, and Antigravity plan
-usage in the Paseo sidebar. Backend code runs unsandboxed beside a Paseo daemon and handles OAuth
-tokens, so treat every change as security-relevant.
+This repository is a single trusted Paseo plugin that reports Claude, Codex, Antigravity,
+OpenRouter, OpenCode Go, and Baseten plan usage in the Paseo sidebar. Backend code runs
+unsandboxed beside a Paseo daemon and handles OAuth tokens, so treat every change as
+security-relevant. The file map, commands, names, and add-a-provider steps are in `README.md`
+under "For AI agents".
 
 ## Ground rules
 
