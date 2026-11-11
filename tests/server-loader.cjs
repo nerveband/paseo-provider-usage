@@ -15,6 +15,7 @@ const exported = [
   'fetchOpenCodeGo',
   'fetchProvider',
   'readOpenCodeGoUsage',
+  'restoreSnapshot',
 ];
 const source = ts.transpileModule(
   readFileSync(serverPath, 'utf8') + exported.map((name) => `\nexports.${name} = ${name};`).join(''),
@@ -31,7 +32,7 @@ function loadServer({ env = {}, home, spawn, execFile = () => {}, fetch } = {}) 
       require: (id) => {
         if (id === 'node:child_process') return { execFile, spawn };
         if (id === 'node:os') return { ...os, homedir: () => home };
-        if (id === '../shared/usage') return {};
+        if (id === '../shared/usage') return { usageSnapshotSchema: { parse: (value) => value } };
         return serverRequire(id);
       },
       process: { env },

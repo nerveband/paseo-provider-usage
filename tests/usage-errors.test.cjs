@@ -148,13 +148,44 @@ test('baseten reports spend, credits applied, and what is still due', () => {
   ]);
   const models = spend.groups.find((group) => group.title === 'Model APIs by model');
   assert.deepEqual(JSON.parse(JSON.stringify(models.rows)), [
-    { label: 'DeepSeek V4.1 Flash', value: '$2.29' },
+    { label: 'DeepSeek V4.1 Flash', value: '$2.29', share: 100 },
   ]);
-  assert.match(spend.note, /remaining credit balance/i);
+  assert.deepEqual(JSON.parse(JSON.stringify(spend.headline)), { label: 'Spent, last 30 days', value: '$2.29' });
   const balance = spend.groups.find((group) => group.title === 'Credit balance');
+  assert.equal(balance.kind, 'balance');
   assert.deepEqual(JSON.parse(JSON.stringify(balance.rows)), [
     { label: 'Remaining', value: 'Not available from the API', unavailable: true },
   ]);
+  // The evidence for the missing balance travels with that field.
+  assert.match(balance.note, /remaining credit balance only on its billing dashboard/i);
+});
+
+test('baseten leads with the total across categories and measures model shares against it', () => {
+  const spend = loadBasetenSpend({
+    model_apis_usage: {
+      subtotal: '1200.50',
+      credits_used: '0.00',
+      total: '1200.50',
+      breakdown: [
+        { model_name: 'Model A', subtotal: '900.50' },
+        { model_name: 'Model B', subtotal: '300.00' },
+      ],
+    },
+    dedicated_usage: { subtotal: '99.50', credits_used: '0.00', total: '99.50', breakdown: [{ model_name: 'Model C', subtotal: '99.50' }] },
+  });
+
+  const window = spend.groups.find((group) => group.title === 'Last 30 days');
+  assert.equal(window.kind, 'spend');
+  // The first row is the key figure, so the total comes before the categories.
+  assert.deepEqual(JSON.parse(JSON.stringify(window.rows.slice(0, 3))), [
+    { label: 'Total before credits', value: '$1,300.00' },
+    { label: 'Model APIs', value: '$1,200.50' },
+    { label: 'Dedicated inference', value: '$99.50' },
+  ]);
+  assert.equal(spend.headline.value, '$1,300.00');
+  const shares = spend.groups.find((group) => group.title === 'Model APIs by model').rows.map((row) => row.share);
+  assert.ok(Math.abs(shares[0] - (900.5 / 1300) * 100) < 1e-9);
+  assert.ok(Math.abs(shares.reduce((sum, share) => sum + share, 0) - 100) < 1e-9);
 });
 
 test('baseten never invents a balance or a spend figure', () => {

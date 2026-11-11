@@ -91,15 +91,21 @@ test('antigravity separates quota, plan, and credits and drops placeholder bucke
   assert.equal(usage.windows[2].windowMinutes, 10080);
 
   const plan = group(usage.spend, 'Plan');
+  assert.equal(plan.kind, 'plan');
   assert.equal(plan.rows[0].unavailable, true);
   assert.match(plan.note, /status line/);
   assert.match(plan.note, /Five-hour limits exist/);
   const credits = group(usage.spend, 'AI credits');
+  assert.equal(credits.kind, 'balance');
   assert.deepEqual(credits.rows, [
     { label: 'Remaining', value: '12.5' },
     { label: 'Used after quota ends', value: 'Off' },
   ]);
-  assert.match(usage.spend.note, /Gemini 5-hour: You have hit your weekly limit, the 5-hour limit does not currently apply/);
+  // The switched-off lane sits with the limits, in words, with agy's own explanation.
+  const off = group(usage.spend, 'Gemini 5-hour');
+  assert.equal(off.kind, 'limits');
+  assert.deepEqual(off.rows, [{ label: 'Gemini 5-hour', value: 'Not in effect' }]);
+  assert.match(off.note, /the 5-hour limit does not currently apply/);
 });
 
 test('antigravity never invents a credit balance or a plan tier', () => {
@@ -212,6 +218,57 @@ test('antigravity without agy installed explains how to get it and starts nothin
   assert.equal(calls.length, 0);
 });
 
+function snapshotHome(antigravity) {
+  return makeHome({
+    '.local/state/paseo-provider-usage/snapshot.json': {
+      fetchedAt: new Date().toISOString(),
+      stale: false,
+      providers: [antigravity],
+    },
+  });
+}
+
+const savedAntigravity = (updatedAt, error = null) => ({
+  id: 'antigravity', name: 'Antigravity', source: 'cli', account: null, plan: null, updatedAt,
+  windows: [{ id: 'w', label: 'Gemini weekly', usedPercent: 10, resetsAt: null, resetDescription: null, windowMinutes: 10080 }],
+  error, spend: null,
+});
+
+test('a reload does not run agy again inside the hold window', async () => {
+  const calls = [];
+  const saved = savedAntigravity(new Date(Date.now() - 5 * 60_000).toISOString());
+  const { restoreSnapshot, fetchAntigravity } = loadServer({
+    home: snapshotHome(saved),
+    env: { ANTIGRAVITY_CLI_PATH: fakeAgy() },
+    spawn: fakeSpawn(calls, (command) => ({ stdout: JSON.stringify(command === '/usage' ? usageEnvelope : creditsEnvelope) })),
+  });
+  await restoreSnapshot();
+  const usage = plain(await fetchAntigravity(false));
+  assert.equal(calls.length, 0);
+  assert.equal(usage.updatedAt, saved.updatedAt);
+
+  // The Refresh button still asks agy.
+  await fetchAntigravity(true);
+  assert.equal(calls.length, 2);
+});
+
+test('an old or failed saved agy answer does not block a fresh read', async () => {
+  for (const saved of [
+    savedAntigravity(new Date(Date.now() - 20 * 60_000).toISOString()),
+    savedAntigravity(new Date().toISOString(), 'Antigravity CLI could not report usage.'),
+  ]) {
+    const calls = [];
+    const { restoreSnapshot, fetchAntigravity } = loadServer({
+      home: snapshotHome(saved),
+      env: { ANTIGRAVITY_CLI_PATH: fakeAgy() },
+      spawn: fakeSpawn(calls, (command) => ({ stdout: JSON.stringify(command === '/usage' ? usageEnvelope : creditsEnvelope) })),
+    });
+    await restoreSnapshot();
+    await fetchAntigravity(false);
+    assert.equal(calls.length, 2);
+  }
+});
+
 /* -------------------------------------------------------------------------- */
 /* OpenRouter                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -251,18 +308,28 @@ test('openrouter splits spend by model with the stored Management key and sends 
   const usage = plain(await fetchOpenRouter());
   assert.equal(usage.error, null);
   assert.deepEqual(group(usage.spend, 'Credits').rows.map((row) => row.value), ['$13.50', '$6.50', '$20.00']);
-  const window = group(usage.spend, 'Last 30 completed UTC days');
-  assert.deepEqual(window.rows, [
+  assert.deepEqual(usage.spend.headline, { label: 'Credits remaining', value: '$13.50' });
+  assert.deepEqual(group(usage.spend, 'Last 30 completed UTC days').rows, [
     { label: 'Spend', value: '$6.00' },
     { label: 'BYOK (billed by the model provider)', value: '$0.25' },
+  ]);
+  assert.deepEqual(group(usage.spend, 'Activity, last 30 completed UTC days').rows, [
     { label: 'Requests', value: '24' },
     { label: 'Tokens', value: '1.9K' },
     { label: 'Models', value: '3' },
   ]);
-  assert.deepEqual(group(usage.spend, 'Spend by model').rows, [
-    { label: 'vendor-a/model-x', value: '$6.00 · 15 req' },
-    { label: 'vendor-b/model-y', value: '<$0.01 · 2 req' },
-  ]);
+  const byModel = group(usage.spend, 'Spend by model');
+  assert.equal(byModel.kind, 'breakdown');
+  assert.deepEqual(
+    byModel.rows.map((row) => [row.label, row.value, row.detail]),
+    [
+      ['vendor-a/model-x', '$6.00', '15 req'],
+      ['vendor-b/model-y', '<$0.01', '2 req'],
+    ],
+  );
+  // Shares are measured against the whole 30-day spend ($6.004), not rescaled to the top model.
+  assert.ok(Math.abs(byModel.rows[0].share - (6 / 6.004) * 100) < 1e-9);
+  assert.ok(Math.abs(byModel.rows[1].share - (0.004 / 6.004) * 100) < 1e-9);
   assert.match(usage.spend.note, /30 completed UTC days/);
 
   // Every request went to openrouter.ai with an OpenRouter key, the stored one first.
@@ -286,7 +353,10 @@ test('openrouter folds extra models into one row after the top eight', async () 
   const usage = plain(await fetchOpenRouter());
   const models = group(usage.spend, 'Spend by model').rows;
   assert.equal(models.length, 9);
-  assert.deepEqual(models[8], { label: 'Other (3 models)', value: '$6.00' });
+  assert.deepEqual([models[8].label, models[8].value], ['Other (3 models)', '$6.00']);
+  // The folded row keeps its real share of the $66 total, so every bar together makes 100%.
+  assert.ok(Math.abs(models[8].share - (6 / 66) * 100) < 1e-9);
+  assert.ok(Math.abs(models.reduce((sum, row) => sum + row.share, 0) - 100) < 1e-9);
 });
 
 test('openrouter with only a regular key still shows credits and says per-model spend needs a Management key', async () => {
@@ -419,13 +489,10 @@ test('opencode go reads plan, exact limits, and spend from the console API with 
   const plan = group(usage.spend, 'Plan');
   assert.deepEqual(plan.rows[0], { label: 'Tier', value: 'Go' });
   assert.equal(plan.rows[1].label, 'Renews');
-  assert.deepEqual(group(usage.spend, 'Used of limit').rows, [
-    { label: '5-hour', value: '$0.00 of $12.00' },
-    { label: 'Weekly', value: '$1.91 of $30.00' },
-    { label: 'Monthly', value: '$3.39 of $60.00' },
-  ]);
-  assert.deepEqual(group(usage.spend, 'Last 30 days').rows, [
-    { label: 'API-rate cost', value: '$5.59' },
+  // The exact dollars sit on each limit row, beside its share.
+  assert.deepEqual(usage.windows.map((window) => window.amount), ['$0.00 of $12.00', '$1.91 of $30.00', '$3.39 of $60.00']);
+  assert.deepEqual(group(usage.spend, 'Last 30 days').rows, [{ label: 'API-rate cost', value: '$5.59' }]);
+  assert.deepEqual(group(usage.spend, 'Activity, last 30 days').rows, [
     { label: 'Requests', value: '3.7K' },
     { label: 'Input tokens', value: '9.1M' },
     { label: 'Output tokens', value: '2.6M' },
@@ -436,14 +503,36 @@ test('opencode go reads plan, exact limits, and spend from the console API with 
   assert.match(balance.note, /Billing: Read/);
 });
 
+/** The billing/status shape observed live on 2026-11-10 with a Usage: Read + Billing: Read personal key. */
+const goBillingBody = (balanceMicroCents, availableMicroCents = balanceMicroCents) => ({
+  billingMode: 'prepaid',
+  mode: 'pay-as-you-go',
+  balanceMicroCents,
+  creditLimitMicroCents: null,
+  availableMicroCents,
+  canPurchaseCredits: true,
+  canEnableAutoRecharge: true,
+});
+
 test('opencode go shows the balance when the key has billing permission', async () => {
-  // The 200 shape comes from CodexBar's OpenCode notes; the stored key gets 403, so it was not seen live.
+  // availableMicroCents is a separate figure; the balance row must read balanceMicroCents only.
   const { fetchOpenCodeGo } = loadServer({
     home: goHome(),
-    fetch: goFetch([], { ...consoleRoutes, '/console/api/billing/status': { balanceMicroCents: '1500000000' } }),
+    fetch: goFetch([], { ...consoleRoutes, '/console/api/billing/status': goBillingBody('1500000000', '99900000000') }),
   });
   const usage = plain(await fetchOpenCodeGo());
   assert.deepEqual(group(usage.spend, 'Pay-as-you-go balance').rows, [{ label: 'Remaining', value: '$15.00' }]);
+});
+
+test('opencode go shows an empty balance as $0.00 instead of hiding it', async () => {
+  const { fetchOpenCodeGo } = loadServer({
+    home: goHome(),
+    fetch: goFetch([], { ...consoleRoutes, '/console/api/billing/status': goBillingBody('0') }),
+  });
+  const usage = plain(await fetchOpenCodeGo());
+  const balance = group(usage.spend, 'Pay-as-you-go balance');
+  assert.deepEqual(balance.rows, [{ label: 'Remaining', value: '$0.00' }]);
+  assert.equal(balance.note, undefined);
 });
 
 test('opencode go falls back to the percent-only route when the console routes fail', async () => {

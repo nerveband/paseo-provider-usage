@@ -143,11 +143,12 @@ function readProviderSpend(usage: JsonObject | null): ProviderUsage["spend"] {
       rows.push({ label: "Limit", value: formatCreditAmount(limit, currency === title ? null : currency) });
     }
     if (period && period !== title) rows.push({ label: "Period", value: period });
-    if (rows.length > 0) groups.push({ title, rows });
+    if (rows.length > 0) groups.push({ kind: "balance", title, rows });
   } else if (credits) {
     const remaining = number(credits.remaining);
     if (remaining !== null) {
       groups.push({
+        kind: "balance",
         title: "Credits",
         rows: [{ label: "Remaining", value: formatCreditAmount(remaining, null) }],
       });
@@ -167,7 +168,7 @@ function readProviderSpend(usage: JsonObject | null): ProviderUsage["spend"] {
     const rows: SpendRow[] = [];
     if (availableCount !== null) rows.push({ label: "Available", value: creditNumber.format(availableCount) });
     if (expiries[0]) rows.push({ label: "Next expiry", value: formatExpiry(expiries[0]) });
-    if (rows.length > 0) groups.push({ title: "Rate limit resets", rows });
+    if (rows.length > 0) groups.push({ kind: "balance", title: "Rate limit resets", rows });
   }
 
   if (groups.length === 0 && notes.length === 0) return null;
@@ -291,8 +292,16 @@ function money(value: unknown): number | null {
   return null;
 }
 
+const usdNumber = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+/** Same format as the Intl-formatted Claude amounts, so every dollar figure groups thousands alike. */
 function formatUsd(value: number): string {
-  return `$${value.toFixed(2)}`;
+  return usdNumber.format(value);
+}
+
+/** A row's share of its group's total, for a bar drawn from zero. */
+function shareOf(part: number, total: number): number {
+  return total > 0 ? Math.max(0, Math.min(100, (part / total) * 100)) : 0;
 }
 
 const basetenCategories = [
@@ -343,23 +352,28 @@ function readBasetenSpend(summary: JsonObject | null): ProviderUsage["spend"] {
     }
   }
 
+  let headline: NonNullable<ProviderUsage["spend"]>["headline"] = null;
   if (grossTotal > 0 || creditTotal > 0 || netTotal > 0) {
-    const rows: SpendRow[] = [...categoryRows];
-    if (categoryRows.length > 1) rows.push({ label: "Before credits", value: formatUsd(grossTotal) });
+    // The first row is the group's key figure, so the total leads when there are several categories.
+    const rows: SpendRow[] =
+      categoryRows.length > 1 ? [{ label: "Total before credits", value: formatUsd(grossTotal) }, ...categoryRows] : [...categoryRows];
     if (creditTotal > 0) rows.push({ label: "Credits applied", value: formatUsd(creditTotal) });
     if (grossTotal > 0) rows.push({ label: "Due after credits", value: formatUsd(netTotal) });
-    if (rows.length > 0) groups.push({ title: `Last ${basetenWindowDays} days`, rows });
+    if (rows.length > 0) groups.push({ kind: "spend", title: `Last ${basetenWindowDays} days`, rows });
+    if (grossTotal > 0) headline = { label: `Spent, last ${basetenWindowDays} days`, value: formatUsd(grossTotal) };
   }
 
   if (models.length > 0) {
     models.sort((a, b) => b.amount - a.amount);
+    const modelTotal = models.reduce((sum, model) => sum + model.amount, 0);
     const rows: SpendRow[] = models.slice(0, 4).map((model) => ({
       label: model.label,
       value: formatUsd(model.amount),
+      share: shareOf(model.amount, modelTotal),
     }));
     const remaining = models.slice(4).reduce((sum, model) => sum + model.amount, 0);
-    if (remaining > 0) rows.push({ label: "Other models", value: formatUsd(remaining) });
-    groups.push({ title: "Model APIs by model", rows });
+    if (remaining > 0) rows.push({ label: "Other models", value: formatUsd(remaining), share: shareOf(remaining, modelTotal) });
+    groups.push({ kind: "breakdown", title: "Model APIs by model", rows });
   }
 
   if (inputTokens > 0 || outputTokens > 0 || cachedTokens > 0) {
@@ -367,7 +381,7 @@ function readBasetenSpend(summary: JsonObject | null): ProviderUsage["spend"] {
     if (inputTokens > 0) rows.push({ label: "Input", value: compactNumber.format(inputTokens) });
     if (cachedTokens > 0) rows.push({ label: "Cached input", value: compactNumber.format(cachedTokens) });
     if (outputTokens > 0) rows.push({ label: "Output", value: compactNumber.format(outputTokens) });
-    groups.push({ title: `Tokens, last ${basetenWindowDays} days`, rows });
+    groups.push({ kind: "detail", title: `Tokens, last ${basetenWindowDays} days`, rows });
   }
 
   if (groups.length === 0) {
@@ -378,12 +392,14 @@ function readBasetenSpend(summary: JsonObject | null): ProviderUsage["spend"] {
   // model_apis, and tool_call_usage; /v1/organizations/me returns only org_id, name,
   // created_at, and aws_assume_role), and the billing docs say to check the remaining credit
   // balance on the dashboard: https://docs.baseten.co/organization/billing#credits
-  groups.push({ title: "Credit balance", rows: [unavailableRow("Remaining")] });
-  notes.push(
-    "Spend and credits applied come from the Baseten billing API; Baseten exposes the remaining " +
-      "credit balance only on its billing dashboard (app.baseten.co/settings/billing).",
-  );
-  return { groups, note: notes.join(" ") };
+  groups.push({
+    kind: "balance",
+    title: "Credit balance",
+    rows: [unavailableRow("Remaining")],
+    note: "Baseten exposes the remaining credit balance only on its billing dashboard (app.baseten.co/settings/billing).",
+  });
+  notes.push("Spend and credits applied come from the Baseten billing API.");
+  return { groups, note: notes.join(" "), headline };
 }
 
 /** CodexBar has no Baseten provider, so Baseten is read from its own billing API. */
@@ -853,8 +869,8 @@ type AgyQuota = {
   windows: ProviderUsage["windows"];
   /** Buckets that report an amount but no fraction, so they cannot draw a bar. */
   rows: SpendRow[];
-  /** The provider's own explanation for each bucket that is switched off right now. */
-  inactive: string[];
+  /** Each bucket that is switched off right now, with the provider's own explanation. */
+  inactive: { label: string; description: string | null }[];
   /** Google lists five-hour limits for Google AI Pro and Ultra only. */
   hasFiveHour: boolean;
 };
@@ -888,7 +904,7 @@ function readAgyQuota(envelope: unknown): AgyQuota | null {
       const label = `${family} ${windowLabel}`;
       if (windowName === "5h") quota.hasFiveHour = true;
       if (bucket.disabled === true) {
-        quota.inactive.push(`${label}: ${string(bucket.description)?.slice(0, 280) ?? "not in effect right now."}`);
+        quota.inactive.push({ label, description: string(bucket.description)?.slice(0, 280) ?? null });
         continue;
       }
       const remaining = number(bucket.remaining_fraction);
@@ -945,8 +961,20 @@ function composeAntigravity(
   ];
   if (overage !== null) creditRows.push({ label: "Used after quota ends", value: overage ? "On" : "Off" });
 
-  const groups: SpendGroup[] = [
+  const groups: SpendGroup[] = [];
+  if (quota.rows.length > 0) groups.push({ kind: "limits", title: "Quota amounts", rows: quota.rows });
+  // A switched-off lane sits with the limits, in words, so it is never read as a 0% bar.
+  for (const lane of quota.inactive) {
+    groups.push({
+      kind: "limits",
+      title: lane.label,
+      rows: [{ label: lane.label, value: "Not in effect" }],
+      note: lane.description,
+    });
+  }
+  groups.push(
     {
+      kind: "plan",
       title: "Plan",
       rows: [unavailableRow("Tier")],
       note:
@@ -954,17 +982,13 @@ function composeAntigravity(
         (quota.hasFiveHour ? " Five-hour limits exist here; Google lists them for Pro and Ultra plans only." : ""),
     },
     {
+      kind: "balance",
       title: "AI credits",
       rows: creditRows,
       note: "Credits apply only after the plan quota is used up, and only when the overage setting is on.",
     },
-  ];
-  if (quota.rows.length > 0) groups.unshift({ title: "Quota amounts", rows: quota.rows });
-  return {
-    ...base,
-    windows: quota.windows,
-    spend: { groups, note: quota.inactive.length > 0 ? quota.inactive.join(" ") : null },
-  };
+  );
+  return { ...base, windows: quota.windows, spend: { groups, note: null } };
 }
 
 
@@ -1155,6 +1179,7 @@ function composeOpenRouterSpend(
   const groups: SpendGroup[] = [];
   if (credits) {
     groups.push({
+      kind: "balance",
       title: "Credits",
       rows: [
         { label: "Remaining", value: formatUsd(credits.total - credits.used) },
@@ -1167,32 +1192,47 @@ function composeOpenRouterSpend(
     const paid = activity.models.filter((entry) => entry.usd > 0).sort((a, b) => b.usd - a.usd);
     const rows: SpendRow[] = [{ label: "Spend", value: formatSpend(activity.usd) }];
     if (activity.byokUsd > 0) rows.push({ label: "BYOK (billed by the model provider)", value: formatSpend(activity.byokUsd) });
-    rows.push(
-      { label: "Requests", value: compactNumber.format(activity.requests) },
-      { label: "Tokens", value: compactNumber.format(activity.tokens) },
-      { label: "Models", value: String(activity.models.length) },
-    );
-    groups.push({ title: "Last 30 completed UTC days", rows });
+    groups.push({ kind: "spend", title: "Last 30 completed UTC days", rows });
+    groups.push({
+      kind: "detail",
+      title: "Activity, last 30 completed UTC days",
+      rows: [
+        { label: "Requests", value: compactNumber.format(activity.requests) },
+        { label: "Tokens", value: compactNumber.format(activity.tokens) },
+        { label: "Models", value: String(activity.models.length) },
+      ],
+    });
     if (paid.length > 0) {
+      // Each share is measured against the whole 30-day spend, so the bars add up to 100%.
       const modelRows: SpendRow[] = paid.slice(0, openRouterModelRows).map((entry) => ({
         label: entry.model,
-        value: `${formatSpend(entry.usd)} · ${compactNumber.format(entry.requests)} req`,
+        value: formatSpend(entry.usd),
+        detail: `${compactNumber.format(entry.requests)} req`,
+        share: shareOf(entry.usd, activity.usd),
       }));
       const rest = paid.slice(openRouterModelRows);
       if (rest.length > 0) {
+        const restUsd = rest.reduce((sum, entry) => sum + entry.usd, 0);
         modelRows.push({
           label: `Other (${rest.length} models)`,
-          value: formatSpend(rest.reduce((sum, entry) => sum + entry.usd, 0)),
+          value: formatSpend(restUsd),
+          detail: `${compactNumber.format(rest.reduce((sum, entry) => sum + entry.requests, 0))} req`,
+          share: shareOf(restUsd, activity.usd),
         });
       }
-      groups.push({ title: "Spend by model", rows: modelRows });
+      groups.push({ kind: "breakdown", title: "Spend by model", rows: modelRows });
     }
     notes.push(
       "Per-model spend comes from OpenRouter's Activity API: the last 30 completed UTC days, " +
         "today excluded, so it can trail the lifetime Used figure.",
     );
   }
-  return { groups, note: notes.length > 0 ? notes.join(" ") : null };
+  const headline = credits
+    ? { label: "Credits remaining", value: formatUsd(credits.total - credits.used) }
+    : activity
+      ? { label: "Spent, last 30 completed UTC days", value: formatSpend(activity.usd) }
+      : null;
+  return { groups, note: notes.length > 0 ? notes.join(" ") : null, headline };
 }
 
 async function fetchOpenRouter(): Promise<ProviderUsage> {
@@ -1250,9 +1290,13 @@ async function fetchOpenRouter(): Promise<ProviderUsage> {
  * routes are not listed in the public docs, so they could change without notice; CodexBar's
  * OpenCode provider uses the same three (https://github.com/steipete/CodexBar/blob/main/docs/opencode.md).
  * Observed 2026-11-10 with the stored Go key: go/status 200 (plan "go", $12 / $30 / $60 limits),
- * usage/summary 200, billing/status 403 Forbidden, so the key lacks Billing: Read. A key with that
- * permission is the only way to show the balance; the shape of a 200 is taken from CodexBar's
- * docs and was not seen live.
+ * usage/summary 200, billing/status 403 Forbidden, so that key lacks Billing: Read. With a personal
+ * key created for this plugin (Console > Account > Personal API keys; Usage: Read, Billing: Read,
+ * Models: None, everything else None) all four routes answered 200 and the inference models list
+ * answered 403, so the key can read but cannot call models. billing/status then returned
+ * { billingMode: "prepaid", mode: "pay-as-you-go", balanceMicroCents: "0", availableMicroCents: "0",
+ * creditLimitMicroCents: null, canPurchaseCredits, canEnableAutoRecharge }. Only `balanceMicroCents`
+ * is read; `availableMicroCents` is a separate credit value, per CodexBar's notes.
  *
  * Fallbacks, in order: GET https://opencode.ai/zen/go/v1/usage (percent and reset per window,
  * from the open-source console route anomalyco/opencode packages/console/app/src/routes/zen/go/v1/usage.ts;
@@ -1299,9 +1343,8 @@ async function readOpenCodeGoKey(): Promise<string | null> {
 
 type OpenCodeGoStatus = {
   plan: string | null;
+  /** Each window carries its dollars used and allowed as `amount`, from the same micro-cent meters. */
   windows: ProviderUsage["windows"];
-  /** Dollars used and allowed per window, from the same micro-cent meters. */
-  limits: SpendRow[];
   periodEnd: string | null;
   ending: boolean;
 };
@@ -1313,7 +1356,6 @@ function readOpenCodeGoStatus(payload: unknown): OpenCodeGoStatus | null {
   const meters = object(access?.meters);
   if (!meters) return null;
   const windows: ProviderUsage["windows"] = [];
-  const limits: SpendRow[] = [];
   for (const definition of openCodeGoMeters) {
     const meter = object(meters[definition.meter]);
     const limit = money(meter?.limitMicroCents);
@@ -1326,10 +1368,7 @@ function readOpenCodeGoStatus(payload: unknown): OpenCodeGoStatus | null {
       resetsAt: isoTimestamp(meter.resetsAt) ?? (definition.meter === "month" ? isoTimestamp(access?.endsAt) : null),
       resetDescription: null,
       windowMinutes: definition.minutes,
-    });
-    limits.push({
-      label: definition.label,
-      value: `${formatUsd(used / microCentsPerUsd)} of ${formatUsd(limit / microCentsPerUsd)}`,
+      amount: `${formatUsd(used / microCentsPerUsd)} of ${formatUsd(limit / microCentsPerUsd)}`,
     });
   }
   if (windows.length === 0) return null;
@@ -1337,7 +1376,6 @@ function readOpenCodeGoStatus(payload: unknown): OpenCodeGoStatus | null {
   return {
     plan: product ? (openCodeGoPlans[product] ?? product) : null,
     windows,
-    limits,
     periodEnd: isoTimestamp(access?.endsAt),
     ending: access?.cancelAtPeriodEnd === true || root?.cancelAtPeriodEnd === true,
   };
@@ -1388,8 +1426,8 @@ function readOpenCodeGoUsage(payload: unknown): ProviderUsage["windows"] | null 
 }
 
 const openCodeBillingHint =
-  "This key cannot read billing. Give an OpenCode API key Billing: Read permission " +
-  "(Console > Account > Personal API keys) to show the balance.";
+  "This key cannot read billing. Set OPENCODE_API_KEY for the Paseo daemon to an OpenCode personal API key " +
+  "with Usage: Read and Billing: Read (Console > Account > Personal API keys) to show the balance.";
 
 type OpenCodeGoReads = {
   status: OpenCodeGoStatus | null;
@@ -1402,15 +1440,20 @@ function composeOpenCodeGo({ status, windows, summary, billing }: OpenCodeGoRead
   const groups: SpendGroup[] = [];
   const planRows: SpendRow[] = [status?.plan ? { label: "Tier", value: status.plan } : unavailableRow("Tier")];
   if (status?.periodEnd) planRows.push({ label: status.ending ? "Ends" : "Renews", value: formatExpiry(status.periodEnd) });
-  groups.push({ title: "Plan", rows: planRows });
-  if (status) groups.push({ title: "Used of limit", rows: status.limits });
-  if (summary) groups.push({ title: "Last 30 days", rows: summary });
+  groups.push({ kind: "plan", title: "Plan", rows: planRows });
+  if (summary) {
+    // readOpenCodeGoSummary lists the API-rate cost first, then the request and token counts.
+    const [cost, ...counts] = summary;
+    groups.push({ kind: "spend", title: "Last 30 days", rows: [cost] });
+    if (counts.length > 0) groups.push({ kind: "detail", title: "Activity, last 30 days", rows: counts });
+  }
 
   const balance = billing.ok ? readOpenCodeGoBalance(billing.payload) : null;
   if (balance !== null) {
-    groups.push({ title: "Pay-as-you-go balance", rows: [{ label: "Remaining", value: formatUsd(balance) }] });
+    groups.push({ kind: "balance", title: "Pay-as-you-go balance", rows: [{ label: "Remaining", value: formatUsd(balance) }] });
   } else {
     groups.push({
+      kind: "balance",
       title: "Pay-as-you-go balance",
       rows: [unavailableRow("Remaining")],
       note: billing.ok
@@ -1438,8 +1481,8 @@ function composeOpenCodeGo({ status, windows, summary, billing }: OpenCodeGoRead
 function openCodeGoEstimateSpend(note: string): NonNullable<ProviderUsage["spend"]> {
   return {
     groups: [
-      { title: "Plan", rows: [unavailableRow("Tier")] },
-      { title: "Pay-as-you-go balance", rows: [unavailableRow("Remaining")] },
+      { kind: "plan", title: "Plan", rows: [unavailableRow("Tier")] },
+      { kind: "balance", title: "Pay-as-you-go balance", rows: [unavailableRow("Remaining")] },
     ],
     note,
   };
@@ -1583,8 +1626,8 @@ async function readClaudeAccount(): Promise<ClaudeAccount> {
   const missing: ClaudeAccount = {
     plan: null,
     groups: [
-      { title: "Plan", rows: [unavailableRow("Tier")] },
-      { title: "Prepaid credits", rows: [unavailableRow("Remaining")] },
+      { kind: "plan", title: "Plan", rows: [unavailableRow("Tier")] },
+      { kind: "balance", title: "Prepaid credits", rows: [unavailableRow("Remaining")] },
     ],
     notes: [],
   };
@@ -1627,9 +1670,9 @@ async function readClaudeAccount(): Promise<ClaudeAccount> {
     call("/api/oauth/usage"),
   ]);
 
-  const groups: SpendGroup[] = [{ title: "Plan", rows: profile?.rows ?? [unavailableRow("Tier")] }];
+  const groups: SpendGroup[] = [{ kind: "plan", title: "Plan", rows: profile?.rows ?? [unavailableRow("Tier")] }];
   const prepaid = prepaidRead?.ok ? readClaudePrepaid(prepaidRead.payload) : null;
-  groups.push({ title: "Prepaid credits", rows: prepaid ?? [unavailableRow("Remaining")] });
+  groups.push({ kind: "balance", title: "Prepaid credits", rows: prepaid ?? [unavailableRow("Remaining")] });
   if (!prepaid && prepaidRead) {
     notes.push(
       prepaidRead.ok
@@ -1638,7 +1681,7 @@ async function readClaudeAccount(): Promise<ClaudeAccount> {
     );
   }
   const extra = usageRead.ok ? readClaudeExtraUsage(usageRead.payload) : null;
-  if (extra) groups.push({ title: "Extra usage", rows: extra });
+  if (extra) groups.push({ kind: "spend", title: "Extra usage", rows: extra });
   else notes.push(usageRead.ok ? "Claude's extra-usage response was not in the expected shape." : `Claude's extra usage could not be loaded (${describeFailure(usageRead)}).`);
   notes.push("Plan, balance, and extra usage come from claude.ai's OAuth account endpoints, which Anthropic does not document.");
   return { plan: profile?.plan ?? null, groups, notes };
@@ -1706,6 +1749,11 @@ async function restoreSnapshot(): Promise<void> {
     const snapshot = usageSnapshotSchema.parse(parsed);
     // Treat a restored snapshot as stale so the first request revalidates it.
     cached = { at: 0, snapshot: { ...snapshot, stale: true } };
+    // A plugin reload or daemon restart clears the in-memory holds. agy is the one source Google
+    // may suspend an account over, so its last good answer keeps its hold across reloads.
+    const agy = snapshot.providers.find((provider) => provider.id === "antigravity");
+    const readAt = agy?.updatedAt ? Date.parse(agy.updatedAt) : Number.NaN;
+    if (agy && !agy.error && Number.isFinite(readAt)) heldResults.set("agy", { at: readAt, value: agy });
   } catch {
     // No usable snapshot on disk: the first request performs a cold fetch.
   }
